@@ -13,6 +13,8 @@ import ConsultantDashboard from "./pages/ConsultantDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import ProjectWorkspace from "./pages/ProjectWorkspace";
 import Profile from "./pages/Profile";
+import NotificationPreferences from "./pages/NotificationPreferences";
+import ConsultantVault from "./pages/ConsultantVault";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -77,6 +79,22 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <Profile />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/notifications/preferences"
+              element={
+                <ProtectedRoute>
+                  <NotificationPreferences />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/vault"
+              element={
+                <ProtectedRoute allowedRoles={['consultant']}>
+                  <ConsultantVault />
                 </ProtectedRoute>
               }
             />
