@@ -65,6 +65,9 @@ export const DashboardLayout = ({ children, title }: DashboardLayoutProps) => {
               );
             })}
             
+            {/* Notification Bell */}
+            <NotificationBell />
+            
             <Button
               variant="ghost"
               size="icon"
@@ -93,3 +96,15 @@ export const DashboardLayout = ({ children, title }: DashboardLayoutProps) => {
     </div>
   );
 };
+
+// Lazy-loaded notification bell to avoid circular imports
+function NotificationBell() {
+  const [NotificationCenter, setNC] = useState<any>(null);
+
+  useEffect(() => {
+    import('@/components/NotificationCenter').then(m => setNC(() => m.NotificationCenter));
+  }, []);
+
+  if (!NotificationCenter) return null;
+  return <NotificationCenter />;
+}

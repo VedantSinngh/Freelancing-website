@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Button } from '@/components/ui/button';
@@ -11,15 +11,17 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useProjects } from '@/hooks/useProjects';
 import { useToast } from '@/hooks/use-toast';
-import { Plus, Briefcase, Eye, Trash2, Edit, CheckCircle, Clock, Users } from 'lucide-react';
+import { Plus, Briefcase, Eye, Trash2, Edit, CheckCircle, Clock, Users, FileText, Shield } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { CollaborationInvites } from '@/components/CollaborationInvites';
+import { ReportCard, type ConsultantReport } from '@/components/ReportCard';
 
 export default function ClientDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const { fetchProjects: fetchProjectsApi, createProject, updateProject: updateProjectApi, deleteProject: deleteProjectApi } = useProjects();
   const [projects, setProjects] = useState<any[]>([]);
+  const [consultantReports, setConsultantReports] = useState<ConsultantReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<any>(null);
@@ -34,9 +36,45 @@ export default function ClientDashboard() {
     skills_required: ''
   });
 
+  const fetchConsultantReports = useCallback(async () => {
+    if (!user?.email) return;
+    try {
+      // Fetch reports accessible to this client via email grants
+      const { data: grants } = await supabase
+        .from('report_access_grants')
+        .select('report_id')
+        .eq('granted_to_email', user.email.toLowerCase());
+
+      const reportIds = (grants || []).map((g: any) => g.report_id);
+      if (reportIds.length === 0) return;
+
+      const { data } = await supabase
+        .from('consultant_reports')
+        .select('*, report_versions(*)')
+        .in('id', reportIds)
+        .order('updated_at', { ascending: false });
+
+      setConsultantReports((data || []).map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        format: r.format,
+        current_version: r.current_version || 1,
+        file_url: r.file_url,
+        file_size: r.file_size || 0,
+        uploader_name: 'Consultant',
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        is_accessible: true,
+        versions: r.report_versions || [],
+        access_count: 0,
+      })));
+    } catch { /* silent */ }
+  }, [user?.email]);
   useEffect(() => {
     if (user?.id) {
-        fetchProjects();
+      fetchProjects();
+      fetchConsultantReports();
     }
     // Note: Supabase realtime channel removed for MongoDB
   }, [user]);
@@ -484,6 +522,31 @@ export default function ClientDashboard() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Consultant Reports Section */}
+        {consultantReports.length > 0 && (
+          <Card className="border-2 border-purple-100 dark:border-purple-900/30">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-purple-500" /> Consultant Reports
+              </CardTitle>
+              <CardDescription>Reports shared with you by your consultants</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {consultantReports.map(report => (
+                <ReportCard
+                  key={report.id}
+                  report={report}
+                  onDownload={(rId) => {
+                    const r = consultantReports.find(x => x.id === rId);
+                    if (r?.file_url && r.file_url !== '#') window.open(r.file_url, '_blank');
+                    else toast({ title: 'Download', description: 'File URL not available yet.' });
+                  }}
+                />
+              ))}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </DashboardLayout>
   );
