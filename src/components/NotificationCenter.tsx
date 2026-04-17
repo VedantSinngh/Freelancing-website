@@ -29,6 +29,16 @@ const TYPE_CONFIG = {
   invite: { icon: Bell, color: 'text-primary', bg: 'bg-primary/10' },
 };
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+const getAuthHeaders = () => {
+    const token = localStorage.getItem('auth_token');
+    return {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+    };
+};
+
 // Helper to create a notification (call from anywhere in the app)
 export async function createNotification(
   userId: string,
@@ -38,10 +48,13 @@ export async function createNotification(
   link?: string
 ) {
   try {
-    await supabase.from('notifications').insert([{ user_id: userId, type, title, body, link, is_read: false }]);
+    await fetch(`${API_URL}/notifications`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ user_id: userId, type, title, body, link })
+    });
   } catch (e) {
-    // Table may not exist yet — fail silently
-    console.warn('Notifications table not ready:', e);
+    console.warn('Failed to create notification:', e);
   }
 }
 
@@ -58,15 +71,14 @@ export function NotificationCenter() {
     if (!user?.id) return;
     setLoading(true);
     try {
-      const { data } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(30);
+      const response = await fetch(`${API_URL}/notifications`, {
+          headers: getAuthHeaders()
+      });
+      if (!response.ok) throw new Error('Failed to fetch');
+      const data = await response.json();
       setNotifications(data || []);
     } catch {
-      // Graceful if table not ready
+      // Graceful
     } finally {
       setLoading(false);
     }
@@ -77,30 +89,39 @@ export function NotificationCenter() {
 
     if (!user?.id) return;
 
-    const channel = supabase
-      .channel(`notifications-${user.id}`)
-      .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'notifications',
-        filter: `user_id=eq.${user.id}`
-      }, () => fetchNotifications())
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    // Periodic refetch as fallback for real-time
+    const interval = setInterval(fetchNotifications, 30000); // 30s
+    return () => clearInterval(interval);
   }, [user?.id, fetchNotifications]);
 
   const markRead = async (id: string) => {
-    await supabase.from('notifications').update({ is_read: true }).eq('id', id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    try {
+        await fetch(`${API_URL}/notifications/${id}/read`, {
+            method: 'PUT',
+            headers: getAuthHeaders()
+        });
+        setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    } catch (e) { /* silent */ }
   };
 
   const markAllRead = async () => {
-    await supabase.from('notifications').update({ is_read: true }).eq('user_id', user?.id).eq('is_read', false);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    try {
+        await fetch(`${API_URL}/notifications/read-all`, {
+            method: 'PUT',
+            headers: getAuthHeaders()
+        });
+        setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    } catch (e) { /* silent */ }
   };
 
   const deleteNotification = async (id: string) => {
-    await supabase.from('notifications').delete().eq('id', id);
-    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+        await fetch(`${API_URL}/notifications/${id}`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        setNotifications(prev => prev.filter(n => n.id !== id));
+    } catch (e) { /* silent */ }
   };
 
   const handleClick = (n: Notification) => {

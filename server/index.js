@@ -6,6 +6,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('./models/User');
 const Project = require('./models/Project');
+const Bid = require('./models/Bid');
+const Notification = require('./models/Notification');
 const Achievement = require('./models/Achievement');
 
 const app = express();
@@ -272,6 +274,7 @@ app.get('/api/projects', authMiddleware, async (req, res) => {
             }
             // For dashboard bids count stub
             doc.bids = [{ count: 0 }];
+            doc.id = doc._id.toString();
             return doc;
         });
 
@@ -370,6 +373,224 @@ app.delete('/api/achievements/:id', authMiddleware, async (req, res) => {
     }
 });
 
+// --- Bid Routes ---
+
+// Create Bid
+app.post('/api/bids', authMiddleware, async (req, res) => {
+    try {
+        if (req.user.role !== 'freelancer') return res.status(403).json({ error: { message: 'Only freelancers can place bids' } });
+        
+        const bid = new Bid({
+            ...req.body,
+            freelancer_id: req.user.userId
+        });
+        await bid.save();
+
+        // Notify client
+        try {
+            const project = await Project.findById(bid.project_id);
+            if (project) {
+                const freelancer = await User.findById(req.user.userId);
+                const notification = new Notification({
+                    user_id: project.client_id,
+                    type: 'bid',
+                    title: 'New Bid Received',
+                    body: `${freelancer?.fullName || 'A freelancer'} has bid $${bid.amount} on your project "${project.title}"`,
+                    link: `/client-dashboard`
+                });
+                await notification.save();
+            }
+        } catch (nErr) {
+            console.error('Failed to send bid notification:', nErr);
+        }
+
+        res.status(201).json(bid);
+    } catch (err) {
+        console.error('Error creating bid:', err);
+        res.status(500).json({ error: { message: 'Server error creating bid' } });
+    }
+});
+
+// Get My Bids (as Freelancer)
+app.get('/api/bids/my', authMiddleware, async (req, res) => {
+    try {
+        const bids = await Bid.find({ freelancer_id: req.user.userId })
+            .populate('project_id', 'title status budget client_id')
+            .sort({ created_at: -1 });
+        
+        // Format for frontend
+        const formattedBids = bids.map(b => {
+            const doc = b.toObject();
+            if (doc.project_id) {
+                doc.projects = { 
+                    title: doc.project_id.title,
+                    status: doc.project_id.status,
+                    budget: doc.project_id.budget
+                };
+                doc.project_id = doc.project_id._id.toString();
+            }
+            return {
+                ...doc,
+                id: doc._id.toString()
+            };
+        });
+
+        res.json(formattedBids);
+    } catch (err) {
+        console.error('Error fetching my bids:', err);
+        res.status(500).json({ error: { message: 'Server error fetching bids' } });
+    }
+});
+
+// Get Bids for Project (as Client)
+app.get('/api/projects/:projectId/bids', authMiddleware, async (req, res) => {
+    try {
+        const bids = await Bid.find({ project_id: req.params.projectId })
+            .populate('freelancer_id', 'fullName email')
+            .sort({ created_at: -1 });
+        
+        const formattedBids = bids.map(b => {
+            const doc = b.toObject();
+            if (doc.freelancer_id) {
+                // frontend expects bid.profiles.full_name
+                doc.profiles = { 
+                    full_name: doc.freelancer_id.fullName,
+                    email: doc.freelancer_id.email
+                };
+                doc.freelancer_id = doc.freelancer_id._id.toString();
+            }
+            return {
+                ...doc,
+                id: doc._id.toString()
+            };
+        });
+
+        res.json(formattedBids);
+    } catch (err) {
+        console.error('Error fetching project bids:', err);
+        res.status(500).json({ error: { message: 'Server error fetching project bids' } });
+    }
+});
+
+// Update Bid Status
+app.put('/api/bids/:id', authMiddleware, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const bid = await Bid.findById(req.params.id);
+        if (!bid) return res.status(404).json({ error: { message: 'Bid not found' } });
+
+        // Update bid
+        bid.status = status;
+        bid.updated_at = Date.now();
+        await bid.save();
+
+        // If accepted, update project status and reject others
+        if (status === 'accepted') {
+            const project = await Project.findByIdAndUpdate(bid.project_id, { status: 'in_progress' });
+            await Bid.updateMany(
+                { project_id: bid.project_id, _id: { $ne: bid._id } },
+                { status: 'rejected' }
+            );
+
+            // Notify freelancer
+            try {
+                const notification = new Notification({
+                    user_id: bid.freelancer_id,
+                    type: 'bid',
+                    title: 'Bid Accepted!',
+                    body: `Your bid on "${project?.title || 'a project'}" has been accepted.`,
+                    link: `/freelancer-dashboard`
+                });
+                await notification.save();
+            } catch (nErr) {
+                console.error('Failed to send acceptance notification:', nErr);
+            }
+        } else if (status === 'rejected') {
+            // Notify freelancer of rejection? (Optional, but good UX)
+            try {
+                const project = await Project.findById(bid.project_id);
+                const notification = new Notification({
+                    user_id: bid.freelancer_id,
+                    type: 'bid',
+                    title: 'Bid Update',
+                    body: `Your bid on "${project?.title || 'a project'}" was not selected.`,
+                    link: `/freelancer-dashboard`
+                });
+                await notification.save();
+            } catch (nErr) { /* silent */ }
+        }
+
+        res.json(bid);
+    } catch (err) {
+        console.error('Error updating bid:', err);
+        res.status(500).json({ error: { message: 'Server error updating bid' } });
+    }
+});
+
+// --- Notification Routes ---
+
+// Create Notification (Internal/Public)
+app.post('/api/notifications', authMiddleware, async (req, res) => {
+    try {
+        const notification = new Notification(req.body);
+        await notification.save();
+        res.status(201).json(notification);
+    } catch (err) {
+        res.status(500).json({ error: { message: 'Server error creating notification' } });
+    }
+});
+
+// Get My Notifications
+app.get('/api/notifications', authMiddleware, async (req, res) => {
+    try {
+        const notifications = await Notification.find({ user_id: req.user.userId })
+            .sort({ created_at: -1 })
+            .limit(30);
+        
+        res.json(notifications.map(n => ({
+            ...n.toObject(),
+            id: n._id.toString()
+        })));
+    } catch (err) {
+        res.status(500).json({ error: { message: 'Server error fetching notifications' } });
+    }
+});
+
+// Mark Read
+app.put('/api/notifications/:id/read', authMiddleware, async (req, res) => {
+    try {
+        await Notification.findOneAndUpdate(
+            { _id: req.params.id, user_id: req.user.userId },
+            { is_read: true }
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: { message: 'Server error marking notification as read' } });
+    }
+});
+
+// Mark All Read
+app.put('/api/notifications/read-all', authMiddleware, async (req, res) => {
+    try {
+        await Notification.updateMany(
+            { user_id: req.user.userId, is_read: false },
+            { is_read: true }
+        );
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: { message: 'Server error marking all notifications as read' } });
+    }
+});
+
+// Delete Notification
+app.delete('/api/notifications/:id', authMiddleware, async (req, res) => {
+    try {
+        await Notification.findOneAndDelete({ _id: req.params.id, user_id: req.user.userId });
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: { message: 'Server error deleting notification' } });
+    }
+});
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useProjects } from '@/hooks/useProjects';
+import { useBids } from '@/hooks/useBids';
 import { useToast } from '@/hooks/use-toast';
 import { Plus, Briefcase, Eye, Trash2, Edit, CheckCircle, Clock, Users, FileText, Shield } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +21,7 @@ export default function ClientDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const { fetchProjects: fetchProjectsApi, createProject, updateProject: updateProjectApi, deleteProject: deleteProjectApi } = useProjects();
+  const { fetchProjectBids, updateBidStatus } = useBids();
   const [projects, setProjects] = useState<any[]>([]);
   const [consultantReports, setConsultantReports] = useState<ConsultantReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -155,28 +157,8 @@ export default function ClientDashboard() {
 
   const viewBids = async (projectId: string) => {
     try {
-      const { data: bidsData, error } = await supabase
-        .from('bids')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      // Fetch profile data for each bid
-      const bidsWithProfiles = await Promise.all(
-        (bidsData || []).map(async (bid) => {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('full_name, avatar_url, skills')
-            .eq('user_id', bid.freelancer_id)
-            .single();
-          
-          return { ...bid, profiles: profile };
-        })
-      );
-
-      setSelectedProjectBids(bidsWithProfiles);
+      const data = await fetchProjectBids(projectId);
+      setSelectedProjectBids(data || []);
       setBidsOpen(true);
     } catch (error: any) {
       toast({
@@ -189,30 +171,7 @@ export default function ClientDashboard() {
 
   const acceptBid = async (bidId: string, projectId: string) => {
     try {
-      // Update bid status
-      const { error: bidError } = await supabase
-        .from('bids')
-        .update({ status: 'accepted' })
-        .eq('id', bidId);
-
-      if (bidError) throw bidError;
-
-      // Update project status
-      const { error: projectError } = await supabase
-        .from('projects')
-        .update({ status: 'in_progress' })
-        .eq('id', projectId);
-
-      if (projectError) throw projectError;
-
-      // Reject other bids
-      const { error: rejectError } = await supabase
-        .from('bids')
-        .update({ status: 'rejected' })
-        .eq('project_id', projectId)
-        .neq('id', bidId);
-
-      if (rejectError) throw rejectError;
+      await updateBidStatus(bidId, 'accepted');
 
       toast({
         title: 'Success',
@@ -442,7 +401,7 @@ export default function ClientDashboard() {
                         <Button
                           variant="outline"
                           size="icon"
-                          onClick={() => viewBids(project.id)}
+                          onClick={() => viewBids(project._id || project.id)}
                           className="rounded-full"
                         >
                           <Eye className="h-4 w-4" />
@@ -508,7 +467,7 @@ export default function ClientDashboard() {
                       
                       {bid.status === 'pending' && (
                         <Button
-                          onClick={() => acceptBid(bid.id, bid.project_id)}
+                          onClick={() => acceptBid(bid._id || bid.id, bid.project_id)}
                           className="rounded-full"
                           style={{ background: 'var(--gradient-primary)' }}
                         >
