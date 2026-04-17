@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useProjects } from '@/hooks/useProjects';
+import { useBids } from '@/hooks/useBids';
 import { useToast } from '@/hooks/use-toast';
 import { Search, Briefcase, DollarSign, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -22,6 +23,7 @@ export default function FreelancerDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
   const { fetchProjects: fetchProjectsApi } = useProjects();
+  const { fetchMyBids: fetchMyBidsApi, submitBid, updateBidStatus } = useBids();
   const [projects, setProjects] = useState<any[]>([]);
   const [myBids, setMyBids] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,18 +40,6 @@ export default function FreelancerDashboard() {
   useEffect(() => {
     fetchProjects();
     fetchMyBids();
-    
-    // Bids realtime updates can remain since they still hit supabase right now
-    const bidsChannel = supabase
-      .channel('bids-updates')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bids', filter: `freelancer_id=eq.${user?.id}` }, () => {
-        fetchMyBids();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(bidsChannel);
-    };
   }, [user]);
 
   const fetchProjects = async () => {
@@ -69,13 +59,7 @@ export default function FreelancerDashboard() {
 
   const fetchMyBids = async () => {
     try {
-      const { data, error } = await supabase
-        .from('bids')
-        .select('*, projects(title, status, budget)')
-        .eq('freelancer_id', user?.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
+      const data = await fetchMyBidsApi();
       setMyBids(data || []);
     } catch (error: any) {
       toast({
@@ -90,17 +74,11 @@ export default function FreelancerDashboard() {
     e.preventDefault();
     
     try {
-      const { error } = await supabase
-        .from('bids')
-        .insert([{
-          project_id: selectedProject.id,
-          freelancer_id: user?.id,
-          amount: parseFloat(bidData.amount),
-          timeline: bidData.timeline,
-          proposal: bidData.proposal
-        }]);
-
-      if (error) throw error;
+      await submitBid(selectedProject._id || selectedProject.id, {
+        amount: parseFloat(bidData.amount),
+        timeline: bidData.timeline,
+        proposal: bidData.proposal
+      });
       
       toast({
         title: 'Success',
@@ -123,12 +101,7 @@ export default function FreelancerDashboard() {
     if (!confirm('Are you sure you want to withdraw this bid?')) return;
 
     try {
-      const { error } = await supabase
-        .from('bids')
-        .update({ status: 'withdrawn' })
-        .eq('id', bidId);
-
-      if (error) throw error;
+      await updateBidStatus(bidId, 'withdrawn');
       
       toast({
         title: 'Success',
