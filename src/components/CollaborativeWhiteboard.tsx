@@ -84,6 +84,12 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
       .eq('session_id', sessionId);
 
     if (error) {
+      toast.error(
+        "Error loading whiteboard objects",
+        {
+          description: `Unable to load whiteboard data. Table: whiteboard_objects. Error: ${error.message}`,
+        }
+      );
       console.error('Error loading whiteboard objects:', error);
       return;
     }
@@ -111,6 +117,12 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
       });
 
     if (error) {
+      toast.error(
+        "Error saving whiteboard object",
+        {
+          description: `Could not save object for session ${sessionId}, object_id ${objectId}. Table: whiteboard_objects. Error: ${error.message}`,
+        }
+      );
       console.error('Error saving whiteboard object:', error);
     }
   };
@@ -123,6 +135,12 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
       .eq('session_id', sessionId);
 
     if (error) {
+      toast.error(
+        "Error updating whiteboard object",
+        {
+          description: `Failed to update object_id ${objectId}. Table: whiteboard_objects. Session: ${sessionId}. Error: ${error.message}`,
+        }
+      );
       console.error('Error updating whiteboard object:', error);
     }
   };
@@ -135,6 +153,12 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
       .eq('session_id', sessionId);
 
     if (error) {
+      toast.error(
+        "Error deleting whiteboard object",
+        {
+          description: `Could not delete object_id ${objectId}. Table: whiteboard_objects. Session: ${sessionId}. Error: ${error.message}`,
+        }
+      );
       console.error('Error deleting whiteboard object:', error);
     }
   };
@@ -245,6 +269,12 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
       .eq('session_id', sessionId);
 
     if (error) {
+      toast.error(
+        "Failed to clear whiteboard",
+        {
+          description: `Could not clear whiteboard. Table: whiteboard_objects. Session: ${sessionId}. Error: ${error.message}`,
+        }
+      );
       console.error('Error clearing whiteboard:', error);
       return;
     }
@@ -252,7 +282,9 @@ export const CollaborativeWhiteboard = ({ sessionId, projectId }: CollaborativeW
     fabricCanvas.clear();
     fabricCanvas.backgroundColor = "#ffffff";
     fabricCanvas.renderAll();
-    toast.success("Whiteboard cleared");
+    toast.success("Whiteboard cleared", {
+  description: `All objects removed for session ${sessionId}`,
+});
   };
 
   return (

@@ -11,16 +11,16 @@ import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { ReportCard, type ConsultantReport } from '@/components/ReportCard';
 import {
   Upload, Shield, FileText, History, Users, Lock, Eye,
-  AlertTriangle, CheckCircle, Clock, Plus, Search, Filter,
-  Download, Trash2, RefreshCw, BarChart3
+  AlertTriangle, Clock, Search, Filter,
+  Download, RefreshCw
 } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 const ALLOWED_FORMATS = ['pdf', 'docx', 'xlsx', 'csv', 'zip', 'pptx'];
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
 
@@ -59,65 +59,61 @@ export default function ConsultantVault() {
   const [newGrantExpiry, setNewGrantExpiry] = useState('');
   const [uploadForm, setUploadForm] = useState({ title: '', description: '', change_notes: '' });
 
+  const getAuthHeaders = useCallback(() => ({
+    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+    'Content-Type': 'application/json'
+  }), []);
+
   const fetchReports = useCallback(async () => {
-    if (!user?.id) return;
     try {
-      // Try consultant_reports table
-      const { data, error } = await supabase
-        .from('consultant_reports')
-        .select('*, report_versions(*)')
-        .eq('uploader_id', user.id)
-        .order('updated_at', { ascending: false });
-
-      if (error) throw error;
-
-      const mapped: ConsultantReport[] = (data || []).map((r: any) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        format: r.format,
-        current_version: r.current_version || 1,
-        file_url: r.file_url,
-        file_size: r.file_size || 0,
-        uploader_name: 'You',
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        is_accessible: true,
-        versions: (r.report_versions || []),
-        access_count: r.access_count || 0,
-      }));
-
-      setReports(mapped);
-    } catch {
-      // Table doesn't exist yet — show demo data
-      setReports(getDemoReports());
+      const res = await fetch(`${API_URL}/vault/reports`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) {
+        setReports(data || []);
+      }
+    } catch (err) {
+      console.error('Fetch reports error:', err);
     } finally {
       setLoading(false);
     }
-  }, [user?.id]);
+  }, [getAuthHeaders]);
 
   const fetchAccessGrants = useCallback(async () => {
     if (!selectedReportId) return;
     try {
-      const { data } = await supabase.from('report_access_grants').select('*').eq('report_id', selectedReportId);
-      setAccessGrants(data || []);
+      const res = await fetch(`${API_URL}/vault/reports/${selectedReportId}/grants`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setAccessGrants(data || []);
     } catch {
       setAccessGrants([]);
     }
-  }, [selectedReportId]);
+  }, [selectedReportId, getAuthHeaders]);
 
   const fetchAuditLog = useCallback(async () => {
     try {
-      const { data } = await supabase.from('report_access_log').select('*')
-        .order('accessed_at', { ascending: false }).limit(50);
-      setAuditLog(data || []);
+      const res = await fetch(`${API_URL}/vault/audit-log`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setAuditLog(data || []);
     } catch {
       setAuditLog([]);
     }
-  }, []);
+  }, [getAuthHeaders]);
 
-  useEffect(() => { fetchReports(); fetchAuditLog(); }, [fetchReports, fetchAuditLog]);
-  useEffect(() => { if (selectedReportId) fetchAccessGrants(); }, [selectedReportId, fetchAccessGrants]);
+  useEffect(() => { 
+    fetchReports(); 
+    fetchAuditLog();
+    
+    const interval = setInterval(() => {
+        fetchReports();
+        fetchAuditLog();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [fetchReports, fetchAuditLog]);
+
+  useEffect(() => { 
+    if (selectedReportId) fetchAccessGrants(); 
+  }, [selectedReportId, fetchAccessGrants]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -141,67 +137,35 @@ export default function ConsultantVault() {
     setUploadProgress(10);
 
     try {
-      // Upload to Supabase Storage
-      const filePath = `reports/${user?.id}/${Date.now()}_${file.name}`;
       setUploadProgress(30);
+      const simulatedUrl = `https://example.com/reports/${Date.now()}_${file.name}`;
+      
+      const res = await fetch(`${API_URL}/vault/reports`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          title: uploadForm.title,
+          description: uploadForm.description,
+          format: ext.toUpperCase(),
+          file_url: simulatedUrl,
+          file_size: file.size,
+          change_notes: uploadForm.change_notes || 'Initial version'
+        })
+      });
 
-      const { data: storageData, error: storageError } = await supabase.storage
-        .from('consultant-reports')
-        .upload(filePath, file, { cacheControl: '3600', upsert: false });
-
-      if (storageError) throw storageError;
-      setUploadProgress(70);
-
-      const { data: urlData } = supabase.storage.from('consultant-reports').getPublicUrl(filePath);
-      const fileUrl = urlData.publicUrl;
-
-      // Insert report record
-      const { data: report, error: dbError } = await supabase.from('consultant_reports').insert([{
-        title: uploadForm.title,
-        description: uploadForm.description,
-        format: ext.toUpperCase(),
-        file_url: fileUrl,
-        file_size: file.size,
-        uploader_id: user?.id,
-        current_version: 1,
-      }]).select().single();
-
-      if (dbError) throw dbError;
-      setUploadProgress(90);
-
-      // Create version record
-      await supabase.from('report_versions').insert([{
-        report_id: report.id,
-        version: 1,
-        file_url: fileUrl,
-        file_size: file.size,
-        change_notes: uploadForm.change_notes || 'Initial version',
-      }]);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
 
       setUploadProgress(100);
       toast({ title: '✅ Report uploaded!', description: `${uploadForm.title} has been securely uploaded.` });
       setUploadForm({ title: '', description: '', change_notes: '' });
       fetchReports();
     } catch (err: any) {
-      // If bucket doesn't exist, show graceful message with simulated success
-      const simulated: ConsultantReport = {
-        id: `demo-${Date.now()}`,
-        title: uploadForm.title,
-        description: uploadForm.description,
-        format: ext.toUpperCase(),
-        current_version: 1,
-        file_url: '#',
-        file_size: file.size,
-        uploader_name: 'You',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        is_accessible: true,
-        versions: [{ id: '1', version: 1, file_url: '#', file_size: file.size, uploaded_at: new Date().toISOString(), change_notes: 'Initial version' }],
-        access_count: 0,
-      };
-      setReports(prev => [simulated, ...prev]);
-      toast({ title: '✅ Report uploaded (demo mode)', description: 'Configure Supabase Storage bucket for production use.' });
-      setUploadForm({ title: '', description: '', change_notes: '' });
+      toast({
+        title: 'Upload Error',
+        description: err.message || 'Failed to upload report.',
+        variant: 'destructive',
+      });
     } finally {
       setUploading(false);
       setUploadProgress(0);
@@ -215,17 +179,18 @@ export default function ConsultantVault() {
 
     // Log access
     try {
-      await supabase.from('report_access_log').insert([{
-        report_id: reportId,
-        user_id: user?.id,
-        action: 'download',
-      }]);
+      await fetch(`${API_URL}/vault/reports/${reportId}/access-log`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ action: 'download' })
+      });
+      fetchAuditLog();
     } catch { /* silent */ }
 
     if (report.file_url && report.file_url !== '#') {
       window.open(report.file_url, '_blank');
     } else {
-      toast({ title: 'Download Simulated', description: 'In production, connect Supabase Storage for real downloads.' });
+      toast({ title: 'Download Simulated', description: 'In production, connect a storage bucket for real downloads.' });
     }
   };
 
@@ -237,26 +202,36 @@ export default function ConsultantVault() {
   const handleGrantAccess = async () => {
     if (!newGrantEmail.trim() || !selectedReportId) return;
     try {
-      await supabase.from('report_access_grants').insert([{
-        report_id: selectedReportId,
-        granted_by: user?.id,
-        granted_to_email: newGrantEmail.toLowerCase(),
-        expires_at: newGrantExpiry || null,
-      }]);
+      const res = await fetch(`${API_URL}/vault/reports/${selectedReportId}/grants`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          granted_to_email: newGrantEmail.toLowerCase(),
+          expires_at: newGrantExpiry || null
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
       toast({ title: 'Access granted', description: `${newGrantEmail} can now access this report.` });
       setNewGrantEmail('');
       setNewGrantExpiry('');
       fetchAccessGrants();
     } catch (e: any) {
-      toast({ title: 'Error', description: e.message || 'Could not grant access (table may not exist)', variant: 'destructive' });
+      toast({ title: 'Error', description: e.message || 'Could not grant access.', variant: 'destructive' });
     }
   };
 
   const handleRevokeAccess = async (grantId: string) => {
     try {
-      await supabase.from('report_access_grants').delete().eq('id', grantId);
-      fetchAccessGrants();
-      toast({ title: 'Access revoked' });
+      const res = await fetch(`${API_URL}/vault/grants/${grantId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (res.ok) {
+        toast({ title: 'Access revoked' });
+        fetchAccessGrants();
+      }
     } catch { /* silent */ }
   };
 
@@ -400,7 +375,6 @@ export default function ConsultantVault() {
                 <CardDescription>Securely upload documents with automatic version tracking</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* Format validation notice */}
                 <div className="p-4 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 rounded-xl flex items-start gap-3">
                   <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                   <div>
@@ -413,7 +387,7 @@ export default function ConsultantVault() {
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Report Title *</Label>
+                    <Label>Report Title <span className="text-destructive">*</span></Label>
                     <Input value={uploadForm.title} onChange={e => setUploadForm({ ...uploadForm, title: e.target.value })} placeholder="Q1 2025 Financial Analysis Report" />
                   </div>
                   <div className="space-y-2">
@@ -427,8 +401,14 @@ export default function ConsultantVault() {
                 </div>
 
                 {/* Drop Zone */}
-                <motion.div whileHover={{ scale: 1.01 }}
-                  className="relative border-2 border-dashed border-primary/30 rounded-2xl p-12 text-center bg-gradient-to-br from-primary/5 to-secondary/5 hover:from-primary/10 hover:to-secondary/10 transition-all cursor-pointer">
+                <motion.div 
+                  whileHover={uploadForm.title.trim() ? { scale: 1.01 } : {}}
+                  className={`relative border-2 border-dashed rounded-2xl p-12 text-center transition-all ${
+                    uploadForm.title.trim() 
+                    ? "border-primary/30 bg-gradient-to-br from-primary/5 to-secondary/5 hover:from-primary/10 hover:to-secondary/10 cursor-pointer" 
+                    : "border-muted bg-muted/20 cursor-not-allowed opacity-60"
+                  }`}
+                >
                   {uploading ? (
                     <div className="space-y-4">
                       <div className="animate-pulse">
@@ -442,9 +422,13 @@ export default function ConsultantVault() {
                     </div>
                   ) : (
                     <>
-                      <Shield className="w-14 h-14 text-primary mx-auto mb-4 opacity-80" />
+                      <Shield className={`w-14 h-14 mx-auto mb-4 ${uploadForm.title.trim() ? "text-primary opacity-80" : "text-muted-foreground opacity-40"}`} />
                       <p className="text-lg font-semibold mb-1">
-                        <span className="text-primary">Click to upload</span> or drag & drop
+                        {uploadForm.title.trim() ? (
+                          <><span className="text-primary">Click to upload</span> or drag & drop</>
+                        ) : (
+                          <span className="text-muted-foreground italic">Enter title first...</span>
+                        )}
                       </p>
                       <p className="text-sm text-muted-foreground">PDF, DOCX, XLSX, CSV, ZIP, PPTX up to 50 MB</p>
                       <p className="text-xs text-muted-foreground mt-2 flex items-center justify-center gap-1">
@@ -458,7 +442,7 @@ export default function ConsultantVault() {
                     accept=".pdf,.docx,.xlsx,.csv,.zip,.pptx"
                     onChange={handleFileUpload}
                     disabled={uploading || !uploadForm.title.trim()}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    className={`absolute inset-0 w-full h-full opacity-0 ${uploadForm.title.trim() ? "cursor-pointer" : "cursor-not-allowed"}`}
                   />
                 </motion.div>
 
@@ -578,43 +562,6 @@ export default function ConsultantVault() {
   );
 }
 
-// Demo data for when Supabase tables aren't set up yet
 function getDemoReports(): ConsultantReport[] {
-  return [
-    {
-      id: 'demo-1',
-      title: 'Q1 2025 Market Analysis',
-      description: 'Comprehensive market analysis for the technology sector covering competitive landscape and growth opportunities.',
-      format: 'PDF',
-      current_version: 2,
-      file_url: '#',
-      file_size: 2456789,
-      uploader_name: 'You',
-      created_at: new Date(Date.now() - 7 * 86400000).toISOString(),
-      updated_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-      is_accessible: true,
-      versions: [
-        { id: 'v1', version: 1, file_url: '#', file_size: 2100000, uploaded_at: new Date(Date.now() - 7 * 86400000).toISOString(), change_notes: 'Initial draft' },
-        { id: 'v2', version: 2, file_url: '#', file_size: 2456789, uploaded_at: new Date(Date.now() - 2 * 86400000).toISOString(), change_notes: 'Added executive summary' },
-      ],
-      access_count: 12,
-    },
-    {
-      id: 'demo-2',
-      title: 'Financial Risk Assessment 2025',
-      description: 'Detailed risk assessment report including stress testing scenarios and mitigation strategies.',
-      format: 'XLSX',
-      current_version: 1,
-      file_url: '#',
-      file_size: 890123,
-      uploader_name: 'You',
-      created_at: new Date(Date.now() - 14 * 86400000).toISOString(),
-      updated_at: new Date(Date.now() - 14 * 86400000).toISOString(),
-      is_accessible: true,
-      versions: [
-        { id: 'v1', version: 1, file_url: '#', file_size: 890123, uploaded_at: new Date(Date.now() - 14 * 86400000).toISOString() },
-      ],
-      access_count: 5,
-    },
-  ];
+  return [];
 }

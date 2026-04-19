@@ -3,7 +3,11 @@ import { motion } from 'framer-motion';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { supabase } from '@/integrations/supabase/client';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { Calendar, Users, FileText, Star, Clock, CheckCircle, Shield } from 'lucide-react';
@@ -24,30 +28,19 @@ export default function ConsultantDashboard() {
 
   const fetchBookings = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('consultancy_bookings')
-        .select('*, profiles!consultancy_bookings_client_id_fkey(full_name)')
-        .eq('consultant_id', user?.id)
-        .order('session_date', { ascending: true });
-      if (error) throw error;
-      setBookings(data || []);
-    } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } finally {
+      const res = await fetch(`${API_URL}/consultancy-bookings`, { headers: getAuthHeaders() });
+      if (res.ok) setBookings(await res.json());
+    } catch { /* silent */ } finally {
       setLoading(false);
     }
   }, [user?.id]);
 
   const fetchRecentReports = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from('consultant_reports')
-        .select('*, report_versions(*)')
-        .eq('uploader_id', user?.id)
-        .order('updated_at', { ascending: false })
-        .limit(3);
-
-      setRecentReports((data || []).map((r: any) => ({
+      const res = await fetch(`${API_URL}/vault/reports`, { headers: getAuthHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      setRecentReports(data.slice(0, 3).map((r: any) => ({
         id: r.id,
         title: r.title,
         description: r.description,
@@ -59,12 +52,10 @@ export default function ConsultantDashboard() {
         created_at: r.created_at,
         updated_at: r.updated_at,
         is_accessible: true,
-        versions: r.report_versions || [],
+        versions: r.versions || [],
         access_count: r.access_count || 0,
       })));
-    } catch {
-      // Table not ready — show empty
-    }
+    } catch { /* silent */ }
   }, [user?.id]);
 
   useEffect(() => {

@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import { DashboardLayout } from '@/components/DashboardLayout';
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Users, Briefcase, DollarSign, TrendingUp } from 'lucide-react';
 import { UserManagement } from '@/components/admin/UserManagement';
@@ -12,6 +11,12 @@ import { ContentModeration } from '@/components/admin/ContentModeration';
 import { DisputeManagement } from '@/components/admin/DisputeManagement';
 import { AchievementManagement } from '@/components/admin/AchievementManagement';
 import { AnnouncementManagement } from '@/components/admin/AnnouncementManagement';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 
 export default function AdminDashboard() {
   const { toast } = useToast();
@@ -29,26 +34,12 @@ export default function AdminDashboard() {
 
   const fetchStats = async () => {
     try {
-      const [usersResult, projectsResult, bidsResult] = await Promise.all([
-        supabase.from('profiles').select('*', { count: 'exact', head: true }),
-        supabase.from('projects').select('*', { count: 'exact', head: true }),
-        supabase.from('bids').select('amount')
-      ]);
-
-      const totalRevenue = bidsResult.data?.reduce((acc, bid) => acc + parseFloat(bid.amount.toString()), 0) || 0;
-
-      setStats({
-        totalUsers: usersResult.count || 0,
-        totalProjects: projectsResult.count || 0,
-        totalBids: bidsResult.data?.length || 0,
-        totalRevenue
-      });
+      const res = await fetch(`${API_URL}/admin/stats`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch stats');
+      const data = await res.json();
+      setStats(data);
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -76,7 +67,7 @@ export default function AdminDashboard() {
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-muted-foreground">{stat.label}</p>
-                      <p className="text-3xl font-bold mt-1">{stat.value}</p>
+                      <p className="text-3xl font-bold mt-1">{loading ? '...' : stat.value}</p>
                     </div>
                     <stat.icon className={`w-10 h-10 ${stat.color}`} />
                   </div>

@@ -4,7 +4,6 @@ import { motion } from 'framer-motion';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { Mail, Check, X, Clock } from 'lucide-react';
@@ -21,6 +20,13 @@ interface CollaborationInvite {
   sender_name?: string;
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
 export function CollaborationInvites() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -29,57 +35,21 @@ export function CollaborationInvites() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (user?.email) {
+    if (user?.id) {
       fetchInvites();
-      
-      // Real-time subscription
-      const channel = supabase
-        .channel('collaboration-invites')
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'collaboration_invites',
-          filter: `receiver_email=eq.${user.email.toLowerCase()}`
-        }, () => {
-          fetchInvites();
-        })
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
+      // Poll every 30s as a simple real-time substitute
+      const interval = setInterval(fetchInvites, 30000);
+      return () => clearInterval(interval);
     }
   }, [user]);
 
   const fetchInvites = async () => {
-    if (!user?.email) return;
-
+    if (!user?.id) return;
     try {
-      const { data, error } = await supabase
-        .from('collaboration_invites')
-        .select('*')
-        .eq('receiver_email', user.email.toLowerCase())
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      // Fetch project titles and sender names
-      const enrichedInvites = await Promise.all(
-        (data || []).map(async (invite) => {
-          const [projectData, senderData] = await Promise.all([
-            supabase.from('projects').select('title').eq('id', invite.project_id).single(),
-            supabase.from('profiles').select('full_name').eq('user_id', invite.sender_id).single()
-          ]);
-
-          return {
-            ...invite,
-            project_title: projectData.data?.title || 'Unknown Project',
-            sender_name: senderData.data?.full_name || 'Unknown User'
-          };
-        })
-      );
-
-      setInvites(enrichedInvites);
+      const res = await fetch(`${API_URL}/collaboration-invites`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch invites');
+      const data = await res.json();
+      setInvites(data || []);
     } catch (error: any) {
       console.error('Error fetching invites:', error);
     } finally {
@@ -89,62 +59,26 @@ export function CollaborationInvites() {
 
   const handleInvite = async (inviteId: string, projectId: string, accept: boolean) => {
     try {
-      const invite = invites.find(i => i.id === inviteId);
-      
-      if (accept && invite) {
-        // Try to add as collaborator, ignore if already exists
-        const { error: collaboratorError } = await supabase
-          .from('project_collaborators')
-          .insert([{
-            project_id: projectId,
-            user_id: user?.id,
-            invited_by: invite.sender_id,
-            role: 'member'
-          }]);
+      const res = await fetch(`${API_URL}/collaboration-invites/${inviteId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ status: accept ? 'accepted' : 'rejected' })
+      });
 
-        // Ignore duplicate key errors (user already a collaborator)
-        if (collaboratorError && collaboratorError.code !== '23505') {
-          throw collaboratorError;
-        }
-
-        // Add sender as a friend/connection
-        const { data: existingFriendship } = await supabase
-          .from('friendships')
-          .select('id')
-          .or(`and(user_id_1.eq.${user?.id},user_id_2.eq.${invite.sender_id}),and(user_id_1.eq.${invite.sender_id},user_id_2.eq.${user?.id})`)
-          .maybeSingle();
-
-        if (!existingFriendship) {
-          await supabase
-            .from('friendships')
-            .insert([{
-              user_id_1: user?.id,
-              user_id_2: invite.sender_id
-            }]);
-        }
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.error?.message || 'Failed to update invite');
       }
-
-      // Update invite status
-      const { error: updateError } = await supabase
-        .from('collaboration_invites')
-        .update({ 
-          status: accept ? 'accepted' : 'rejected',
-          receiver_id: user?.id 
-        })
-        .eq('id', inviteId);
-
-      if (updateError) throw updateError;
 
       toast({
         title: accept ? 'Invitation Accepted' : 'Invitation Declined',
-        description: accept 
-          ? 'Opening project workspace. Sender added as connection!' 
+        description: accept
+          ? 'Opening project workspace. Sender added as connection!'
           : 'The invitation has been declined.'
       });
 
       fetchInvites();
-      
-      // Navigate to project workspace after accepting
+
       if (accept) {
         setTimeout(() => {
           navigate(`/project/${projectId}`);
@@ -152,9 +86,9 @@ export function CollaborationInvites() {
       }
     } catch (error: any) {
       toast({
-        title: 'Error',
+        title: 'Error handling invite',
         description: error.message,
-        variant: 'destructive'
+        variant: 'destructive',
       });
     }
   };

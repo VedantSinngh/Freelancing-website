@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,11 +6,16 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
 interface ModerationItem {
   id: string;
   content_type: string;
   content_id: string;
-  reported_by: string;
   reason: string;
   status: string;
   created_at: string;
@@ -29,20 +33,13 @@ export function ContentModeration() {
   }, []);
 
   const fetchModerationItems = async () => {
+    setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('content_moderation')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setItems(data || []);
+      const res = await fetch(`${API_URL}/content-moderation`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch moderation items');
+      setItems(await res.json());
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -50,42 +47,25 @@ export function ContentModeration() {
 
   const handleModeration = async (itemId: string, action: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      const { error } = await supabase
-        .from('content_moderation')
-        .update({
-          status: 'reviewed',
-          action_taken: action,
-          moderator_notes: moderatorNotes,
-          reviewed_by: user?.id,
-          reviewed_at: new Date().toISOString()
-        })
-        .eq('id', itemId);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Moderation action completed'
+      const res = await fetch(`${API_URL}/content-moderation/${itemId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ action_taken: action, moderator_notes: moderatorNotes })
       });
-
+      if (!res.ok) throw new Error('Failed to moderate item');
+      toast({ title: 'Success', description: 'Moderation action completed' });
       setSelectedItem(null);
       setModeratorNotes('');
       fetchModerationItems();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-warning text-warning-foreground';
-      case 'reviewed': return 'bg-success text-success-foreground';
+      case 'reviewed': return 'bg-muted text-muted-foreground';
       default: return 'bg-muted text-muted-foreground';
     }
   };
@@ -112,17 +92,12 @@ export function ContentModeration() {
         ) : (
           <div className="space-y-4">
             {items.map((item) => (
-              <div
-                key={item.id}
-                className="border border-border rounded-lg p-4 space-y-3"
-              >
+              <div key={item.id} className="border border-border rounded-lg p-4 space-y-3">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline">{item.content_type}</Badge>
-                      <Badge className={getStatusColor(item.status)}>
-                        {item.status}
-                      </Badge>
+                      <Badge className={getStatusColor(item.status)}>{item.status}</Badge>
                     </div>
                     <p className="text-sm font-medium mb-1">Reason: {item.reason}</p>
                     <p className="text-xs text-muted-foreground">
@@ -140,26 +115,14 @@ export function ContentModeration() {
                       rows={3}
                     />
                     <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleModeration(item.id, 'dismissed')}
-                      >
+                      <Button size="sm" variant="outline" onClick={() => handleModeration(item.id, 'dismissed')}>
                         <XCircle className="w-4 h-4 mr-2" />
                         Dismiss
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleModeration(item.id, 'warning')}
-                      >
+                      <Button size="sm" variant="outline" onClick={() => handleModeration(item.id, 'warning')}>
                         Warning
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => handleModeration(item.id, 'content_removed')}
-                      >
+                      <Button size="sm" variant="destructive" onClick={() => handleModeration(item.id, 'content_removed')}>
                         Remove Content
                       </Button>
                     </div>
@@ -167,11 +130,7 @@ export function ContentModeration() {
                 )}
 
                 {item.status === 'pending' && selectedItem !== item.id && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSelectedItem(item.id)}
-                  >
+                  <Button size="sm" variant="outline" onClick={() => setSelectedItem(item.id)}>
                     Review
                   </Button>
                 )}
