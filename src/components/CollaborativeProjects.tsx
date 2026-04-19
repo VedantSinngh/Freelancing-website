@@ -4,7 +4,6 @@ import { motion } from 'framer-motion';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Users, ArrowRight } from 'lucide-react';
 
@@ -17,6 +16,13 @@ interface Project {
   created_at: string;
 }
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
 export function CollaborativeProjects() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -26,56 +32,18 @@ export function CollaborativeProjects() {
   useEffect(() => {
     if (user?.id) {
       fetchCollaborativeProjects();
-      
-      // Real-time subscription
-      const channel = supabase
-        .channel('collaborative-projects')
-        .on('postgres_changes', { 
-          event: '*', 
-          schema: 'public', 
-          table: 'project_collaborators',
-          filter: `user_id=eq.${user.id}`
-        }, () => {
-          fetchCollaborativeProjects();
-        })
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
+      const interval = setInterval(fetchCollaborativeProjects, 30000);
+      return () => clearInterval(interval);
     }
   }, [user]);
 
   const fetchCollaborativeProjects = async () => {
     if (!user?.id) return;
-
     try {
-      // Get projects where user is a collaborator
-      const { data: collaborations, error: collabError } = await supabase
-        .from('project_collaborators')
-        .select('project_id')
-        .eq('user_id', user.id);
-
-      if (collabError) throw collabError;
-
-      if (!collaborations || collaborations.length === 0) {
-        setProjects([]);
-        setLoading(false);
-        return;
-      }
-
-      const projectIds = collaborations.map(c => c.project_id);
-
-      // Fetch the actual projects
-      const { data: projectsData, error: projectsError } = await supabase
-        .from('projects')
-        .select('*')
-        .in('id', projectIds)
-        .order('created_at', { ascending: false });
-
-      if (projectsError) throw projectsError;
-
-      setProjects(projectsData || []);
+      const res = await fetch(`${API_URL}/collaborative-projects`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch');
+      const data = await res.json();
+      setProjects(data || []);
     } catch (error: any) {
       console.error('Error fetching collaborative projects:', error);
     } finally {

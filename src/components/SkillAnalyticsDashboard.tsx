@@ -4,21 +4,28 @@ import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { supabase } from "@/integrations/supabase/client";
+import { Input } from "./ui/input";
 import { useAuth } from "@/hooks/useAuth";
-import { toast } from "sonner";
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Target, 
-  Award, 
+import { useToast } from "@/hooks/use-toast";
+import {
+  TrendingUp,
+  TrendingDown,
+  Target,
+  Award,
   Brain,
   BarChart3,
   Loader2,
   Lightbulb,
-  Star
+  Star,
+  Plus
 } from "lucide-react";
 import { motion } from "framer-motion";
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 
 interface SkillData {
   skill: string;
@@ -37,54 +44,67 @@ interface Insight {
 
 export const SkillAnalyticsDashboard = () => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [skills, setSkills] = useState<SkillData[]>([]);
   const [insights, setInsights] = useState<Insight | null>(null);
   const [summary, setSummary] = useState<any>(null);
+  const [newSkill, setNewSkill] = useState('');
+  const [newLevel, setNewLevel] = useState('3');
 
   useEffect(() => {
-    fetchSkillData();
+    if (user) fetchSkillData();
   }, [user]);
 
   const fetchSkillData = async () => {
-    if (!user) return;
-
+    setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('skill_analytics')
-        .select('*')
-        .eq('user_id', user.id);
-
-      if (error) throw error;
-
+      const res = await fetch(`${API_URL}/skill-analytics`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to load skill data');
+      const data = await res.json();
       setSkills(data || []);
-    } catch (error) {
-      console.error('Error fetching skill data:', error);
-      toast.error("Failed to load skill data");
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const addSkill = async () => {
+    if (!newSkill.trim()) return;
+    try {
+      const res = await fetch(`${API_URL}/skill-analytics`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ skill: newSkill.trim(), proficiency_level: parseInt(newLevel) })
+      });
+      if (!res.ok) throw new Error('Failed to add skill');
+      setNewSkill('');
+      setNewLevel('3');
+      fetchSkillData();
+      toast({ title: 'Success', description: 'Skill added to your analytics' });
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const analyzeSkills = async () => {
     setAnalyzing(true);
     try {
-      const { data, error } = await supabase.functions.invoke('analyze-skills', {
-        headers: {
-          Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
-        }
+      const res = await fetch(`${API_URL}/skill-analytics/analyze`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({})
       });
-
-      if (error) throw error;
-
-      setInsights(data.insights);
-      setSummary(data.summary);
-      setSkills(data.skills);
-      toast.success("Analysis complete!");
+      if (!res.ok) throw new Error('Failed to analyze skills');
+      const data = await res.json();
+      if (data.skills) setSkills(data.skills);
+      if (data.insights) setInsights(data.insights);
+      if (data.summary) setSummary(data.summary);
+      toast({ title: '✅ Analysis complete!', description: 'AI has generated insights for your skills.' });
     } catch (error: any) {
-      console.error('Error analyzing skills:', error);
-      toast.error(error.message || "Failed to analyze skills");
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setAnalyzing(false);
     }
@@ -97,7 +117,7 @@ export const SkillAnalyticsDashboard = () => {
     return "text-red-600";
   };
 
-  const getPriorityColor = (priority: string) => {
+  const getPriorityColor = (priority: string): "destructive" | "default" | "secondary" | "outline" => {
     switch (priority) {
       case 'high': return 'destructive';
       case 'medium': return 'default';
@@ -129,8 +149,8 @@ export const SkillAnalyticsDashboard = () => {
                 AI-powered insights into your skills, performance, and growth opportunities
               </CardDescription>
             </div>
-            <Button 
-              onClick={analyzeSkills} 
+            <Button
+              onClick={analyzeSkills}
               disabled={analyzing || skills.length === 0}
               className="gap-2"
             >
@@ -168,6 +188,34 @@ export const SkillAnalyticsDashboard = () => {
         )}
       </Card>
 
+      {/* Add Skill */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Add a Skill to Track</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2">
+            <Input
+              placeholder="Skill name (e.g. React, Python)"
+              value={newSkill}
+              onChange={e => setNewSkill(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addSkill()}
+              className="flex-1"
+            />
+            <select
+              className="border rounded-md px-3 py-2 text-sm bg-background"
+              value={newLevel}
+              onChange={e => setNewLevel(e.target.value)}
+            >
+              {[1,2,3,4,5].map(l => <option key={l} value={l}>Level {l}</option>)}
+            </select>
+            <Button onClick={addSkill} className="gap-1">
+              <Plus className="h-4 w-4" /> Add
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {skills.length === 0 ? (
         <Card className="p-8">
           <div className="text-center space-y-4">
@@ -175,7 +223,7 @@ export const SkillAnalyticsDashboard = () => {
             <div>
               <h3 className="text-lg font-semibold">No Skill Data Yet</h3>
               <p className="text-muted-foreground mt-2">
-                Start working on projects to build your skill analytics
+                Add your skills above to start tracking analytics and get AI insights.
               </p>
             </div>
           </div>
@@ -209,7 +257,7 @@ export const SkillAnalyticsDashboard = () => {
                     key={skill.skill}
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: idx * 0.1 }}
+                    transition={{ delay: idx * 0.05 }}
                     className="space-y-2"
                   >
                     <div className="flex items-center justify-between">

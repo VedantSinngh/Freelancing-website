@@ -1,12 +1,16 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Sparkles, Loader2, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 
 interface Recommendation {
   project_id: string;
@@ -25,36 +29,22 @@ interface Recommendation {
 export const AIJobRecommendations = () => {
   const { toast } = useToast();
   const [isGenerating, setIsGenerating] = useState(false);
-
-  const { data, refetch, isLoading } = useQuery({
-    queryKey: ["ai-job-recommendations"],
-    queryFn: async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data, error } = await supabase.functions.invoke("recommend-jobs", {
-        body: { user_id: user.id },
-      });
-
-      if (error) {
-        if (error.message?.includes("429")) {
-          throw new Error("Rate limit exceeded. Please try again later.");
-        }
-        if (error.message?.includes("402")) {
-          throw new Error("AI credits exhausted. Please add credits to continue.");
-        }
-        throw error;
-      }
-
-      return data.recommendations as Recommendation[];
-    },
-    enabled: false,
-  });
+  const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
 
   const handleGenerateRecommendations = async () => {
     setIsGenerating(true);
     try {
-      await refetch();
+      const res = await fetch(`${API_URL}/ai/job-recommendations`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({})
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || 'Failed to generate recommendations');
+      }
+      const data = await res.json();
+      setRecommendations(data.recommendations || []);
       toast({
         title: "Recommendations generated!",
         description: "AI has analyzed your profile and found matching projects.",
@@ -82,42 +72,35 @@ export const AIJobRecommendations = () => {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {!data && !isLoading && (
+        {!recommendations && !isGenerating && (
           <Button
             onClick={handleGenerateRecommendations}
             disabled={isGenerating}
             className="w-full"
           >
-            {isGenerating ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Analyzing your profile...
-              </>
-            ) : (
-              <>
-                <Sparkles className="mr-2 h-4 w-4" />
-                Generate AI Recommendations
-              </>
-            )}
+            <>
+              <Sparkles className="mr-2 h-4 w-4" />
+              Generate AI Recommendations
+            </>
           </Button>
         )}
 
-        {isLoading && (
+        {isGenerating && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
         )}
 
-        {data && data.length === 0 && (
+        {recommendations && recommendations.length === 0 && (
           <p className="text-center text-muted-foreground py-4">
-            No recommendations available. Try updating your profile or check back later.
+            No open projects found matching your skills right now. Complete your profile with skills to improve matches.
           </p>
         )}
 
-        {data && data.length > 0 && (
+        {recommendations && recommendations.length > 0 && (
           <>
             <div className="space-y-3">
-              {data.map((rec) => (
+              {recommendations.map((rec) => (
                 <Card key={rec.project_id} className="border-l-4 border-l-primary">
                   <CardContent className="pt-4">
                     <div className="flex justify-between items-start mb-2">
@@ -127,7 +110,7 @@ export const AIJobRecommendations = () => {
                         {rec.score}% Match
                       </Badge>
                     </div>
-                    
+
                     <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
                       {rec.project.description}
                     </p>
@@ -156,7 +139,7 @@ export const AIJobRecommendations = () => {
                 </Card>
               ))}
             </div>
-            
+
             <Button
               onClick={handleGenerateRecommendations}
               disabled={isGenerating}

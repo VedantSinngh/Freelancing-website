@@ -45,8 +45,13 @@ export const CollaborationWorkspace = ({ projectId }: CollaborationWorkspaceProp
         setSessionId(newSession.id);
       }
     } catch (error) {
-      console.error('Error initializing session:', error);
-      toast.error("Failed to initialize collaboration workspace");
+      toast.error(
+  "Failed to initialize collaboration workspace",
+  {
+    description: `Project: ${projectId}. Table: whiteboard_sessions. Error: ${error.message || error}`,
+  }
+);
+console.error('Error initializing session:', error);
     } finally {
       setLoading(false);
     }

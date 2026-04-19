@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { DashboardLayout } from '@/components/DashboardLayout';
@@ -12,11 +12,12 @@ import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { MessageSquare, Upload, CheckCircle, FileText, ArrowLeft, UserPlus, Users, LogOut, Bell } from 'lucide-react';
 import { CollaborationWorkspace } from '@/components/CollaborationWorkspace';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 export default function ProjectWorkspace() {
   const { projectId } = useParams();
@@ -37,44 +38,82 @@ export default function ProjectWorkspace() {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [lastMessageCount, setLastMessageCount] = useState(0);
 
+  const getAuthHeaders = useCallback(() => ({
+    'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+    'Content-Type': 'application/json'
+  }), []);
+
+  const fetchProject = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/projects/${projectId}`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      setProject(data);
+    } catch (error: any) {
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+      navigate(-1);
+    }
+  }, [projectId, getAuthHeaders, navigate, toast]);
+
+  const fetchMessages = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/projects/${projectId}/messages`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setMessages(data || []);
+    } catch (err) {}
+  }, [projectId, getAuthHeaders]);
+
+  const fetchMilestones = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/projects/${projectId}/milestones`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setMilestones(data || []);
+    } catch (err) {}
+  }, [projectId, getAuthHeaders]);
+
+  const fetchFiles = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/projects/${projectId}/files`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setFiles(data || []);
+    } catch (err) {}
+  }, [projectId, getAuthHeaders]);
+
+  const fetchCollaborators = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/projects/${projectId}/collaborators`, { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (!data.error) setCollaborators(data || []);
+    } catch (err) {}
+  }, [projectId, getAuthHeaders]);
+
   useEffect(() => {
     if (projectId) {
-      fetchProjectData();
+      fetchProject();
+      fetchMessages();
+      fetchMilestones();
+      fetchFiles();
+      fetchCollaborators();
       
-      // Real-time subscriptions
-      const messagesChannel = supabase
-        .channel('messages-channel')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `project_id=eq.${projectId}` }, () => {
-          fetchMessages();
-        })
-        .subscribe();
-
-      const milestonesChannel = supabase
-        .channel('milestones-channel')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'milestones', filter: `project_id=eq.${projectId}` }, () => {
+      // Polling for real-time updates
+      const messageInterval = setInterval(fetchMessages, 3000);
+      const otherInterval = setInterval(() => {
           fetchMilestones();
-        })
-        .subscribe();
-
-      const collaboratorsChannel = supabase
-        .channel('collaborators-channel')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'project_collaborators', filter: `project_id=eq.${projectId}` }, () => {
           fetchCollaborators();
-        })
-        .subscribe();
+          fetchFiles();
+      }, 30000);
 
       return () => {
-        supabase.removeChannel(messagesChannel);
-        supabase.removeChannel(milestonesChannel);
-        supabase.removeChannel(collaboratorsChannel);
+        clearInterval(messageInterval);
+        clearInterval(otherInterval);
       };
     }
-  }, [projectId]);
+  }, [projectId, fetchProject, fetchMessages, fetchMilestones, fetchFiles, fetchCollaborators]);
 
   useEffect(() => {
     if (messages.length > lastMessageCount && lastMessageCount > 0) {
       const latestMessage = messages[messages.length - 1];
-      if (latestMessage.sender_id !== user?.id) {
+      if (latestMessage.sender_id !== user?.id && latestMessage.sender_id !== user?._id) {
         toast({
           title: '💬 New Message',
           description: `${latestMessage.sender_name}: ${latestMessage.content.substring(0, 50)}${latestMessage.content.length > 50 ? '...' : ''}`,
@@ -82,129 +121,29 @@ export default function ProjectWorkspace() {
       }
     }
     setLastMessageCount(messages.length);
-  }, [messages]);
+  }, [messages, user, lastMessageCount, toast]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const fetchProjectData = async () => {
-    await Promise.all([
-      fetchProject(),
-      fetchMessages(),
-      fetchMilestones(),
-      fetchFiles(),
-      fetchCollaborators()
-    ]);
-  };
-
-  const fetchProject = async () => {
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('id', projectId)
-      .single();
-
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-      navigate(-1);
-    } else {
-      setProject(data);
-    }
-  };
-
-  const fetchMessages = async () => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: true });
-
-    if (!error) {
-      const messagesWithProfiles = await Promise.all(
-        (data || []).map(async (msg) => {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('user_id', msg.sender_id)
-            .maybeSingle();
-          return { ...msg, sender_name: profile?.full_name || 'Unknown' };
-        })
-      );
-      setMessages(messagesWithProfiles);
-    }
-  };
-
-  const fetchMilestones = async () => {
-    const { data } = await supabase
-      .from('milestones')
-      .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: true });
-
-    setMilestones(data || []);
-  };
-
-  const fetchFiles = async () => {
-    const { data } = await supabase
-      .from('files')
-      .select('*')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false });
-
-    if (data) {
-      const filesWithProfiles = await Promise.all(
-        data.map(async (file) => {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('full_name')
-            .eq('user_id', file.uploader_id)
-            .maybeSingle();
-          return { ...file, uploader_name: profile?.full_name || 'Unknown' };
-        })
-      );
-      setFiles(filesWithProfiles);
-    }
-  };
-
-  const fetchCollaborators = async () => {
-    const { data } = await supabase
-      .from('project_collaborators')
-      .select('*')
-      .eq('project_id', projectId);
-
-    if (data) {
-      const collaboratorsWithProfiles = await Promise.all(
-        data.map(async (collab) => {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('full_name, avatar_url')
-            .eq('user_id', collab.user_id)
-            .maybeSingle();
-          return { 
-            ...collab, 
-            full_name: profile?.full_name || 'Unknown',
-            avatar_url: profile?.avatar_url 
-          };
-        })
-      );
-      setCollaborators(collaboratorsWithProfiles);
-    }
-  };
-
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim()) return;
 
-    const { error } = await supabase
-      .from('messages')
-      .insert([{ project_id: projectId, sender_id: user?.id, content: newMessage }]);
-
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      setNewMessage('');
-      fetchMessages();
+    try {
+        const res = await fetch(`${API_URL}/projects/${projectId}/messages`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ content: newMessage })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
+        
+        setNewMessage('');
+        fetchMessages();
+    } catch (error: any) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -212,26 +151,32 @@ export default function ProjectWorkspace() {
     e.preventDefault();
     if (!newMilestone.title.trim()) return;
 
-    const { error } = await supabase
-      .from('milestones')
-      .insert([{ ...newMilestone, project_id: projectId }]);
+    try {
+        const res = await fetch(`${API_URL}/projects/${projectId}/milestones`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(newMilestone)
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
 
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Success', description: 'Milestone added' });
-      setNewMilestone({ title: '', description: '' });
-      fetchMilestones();
+        toast({ title: 'Success', description: 'Milestone added' });
+        setNewMilestone({ title: '', description: '' });
+        fetchMilestones();
+    } catch (error: any) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const toggleMilestone = async (id: string, completed: boolean) => {
-    const { error } = await supabase
-      .from('milestones')
-      .update({ completed: !completed })
-      .eq('id', id);
-
-    if (!error) fetchMilestones();
+    try {
+        const res = await fetch(`${API_URL}/milestones/${id}`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ completed: !completed })
+        });
+        if (res.ok) fetchMilestones();
+    } catch (err) {}
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -240,25 +185,26 @@ export default function ProjectWorkspace() {
 
     setUploading(true);
     
-    // Simulate file upload (in real app, upload to storage bucket)
-    const { error } = await supabase
-      .from('files')
-      .insert([{
-        project_id: projectId,
-        uploader_id: user?.id,
-        file_name: file.name,
-        file_url: `https://example.com/${file.name}`,
-        file_size: file.size
-      }]);
+    try {
+        const res = await fetch(`${API_URL}/projects/${projectId}/files`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                file_name: file.name,
+                file_url: `https://example.com/${file.name}`, // Simulated
+                file_size: file.size
+            })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
 
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Success', description: 'File uploaded' });
-      fetchFiles();
+        toast({ title: 'Success', description: 'File uploaded' });
+        fetchFiles();
+    } catch (error: any) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
+    } finally {
+        setUploading(false);
     }
-    
-    setUploading(false);
   };
 
   const handleInviteCollaborator = async (e: React.FormEvent) => {
@@ -266,48 +212,41 @@ export default function ProjectWorkspace() {
     if (!inviteEmail.trim()) return;
 
     try {
-      // Create collaboration invite
-      const { error } = await supabase
-        .from('collaboration_invites')
-        .insert([{
-          project_id: projectId,
-          sender_id: user?.id,
-          receiver_email: inviteEmail.toLowerCase(),
-          message: `You've been invited to collaborate on: ${project.title}`,
-          status: 'pending'
-        }]);
+        const res = await fetch(`${API_URL}/collaboration-invites`, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                project_id: projectId,
+                receiver_email: inviteEmail.toLowerCase(),
+                message: `You've been invited to collaborate on: ${project.title}`
+            })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error.message);
 
-      if (error) {
-        if (error.code === '23505') {
-          toast({ title: 'Info', description: 'Invitation already sent', variant: 'default' });
-        } else {
-          throw error;
-        }
-      } else {
         toast({ 
-          title: 'Success', 
-          description: 'Collaboration invite sent! The user will receive a notification.' 
+            title: 'Success', 
+            description: 'Collaboration invite sent!' 
         });
         setInviteEmail('');
         setInviteDialogOpen(false);
-      }
     } catch (error: any) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const handleLeaveWorkspace = async () => {
-    const { error } = await supabase
-      .from('project_collaborators')
-      .delete()
-      .eq('project_id', projectId)
-      .eq('user_id', user?.id);
-
-    if (error) {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    } else {
-      toast({ title: 'Success', description: 'Left workspace' });
-      navigate(-1);
+    try {
+        const res = await fetch(`${API_URL}/projects/${projectId}/collaborators`, {
+            method: 'DELETE',
+            headers: getAuthHeaders()
+        });
+        if (res.ok) {
+            toast({ title: 'Success', description: 'Left workspace' });
+            navigate(-1);
+        }
+    } catch (error: any) {
+        toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -324,8 +263,8 @@ export default function ProjectWorkspace() {
     );
   }
 
-  const isProjectOwner = project?.client_id === user?.id;
-  const isAcceptedFreelancer = true; // Simplified - should check bids table
+  const isProjectOwner = project?.client_id?._id === user?.id || project?.client_id === user?.id;
+  const isAcceptedFreelancer = true; // Simplified
 
   return (
     <DashboardLayout title={project.title}>
@@ -345,7 +284,7 @@ export default function ProjectWorkspace() {
                 <div className="flex items-center gap-3 mb-2">
                   <h1 className="text-3xl font-bold truncate">{project.title}</h1>
                   <Badge variant={project.status === 'in_progress' ? 'default' : 'secondary'}>
-                    {project.status.replace('_', ' ')}
+                    {(project.status || 'in_progress').replace('_', ' ')}
                   </Badge>
                 </div>
                 <p className="text-muted-foreground line-clamp-2">{project.description}</p>
@@ -368,7 +307,7 @@ export default function ProjectWorkspace() {
                       >
                         <Avatar className="border-2 border-background">
                           <AvatarFallback className="bg-primary/10 text-primary">
-                            {collab.full_name.substring(0, 2).toUpperCase()}
+                            {(collab.full_name || 'U').substring(0, 2).toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                       </motion.div>
@@ -400,7 +339,7 @@ export default function ProjectWorkspace() {
                       <DialogHeader>
                         <DialogTitle>Invite Collaborator</DialogTitle>
                         <DialogDescription>
-                          Enter the name or email of the user you want to invite to this project.
+                          Enter the email of the user you want to invite to this project.
                         </DialogDescription>
                       </DialogHeader>
                       <form onSubmit={handleInviteCollaborator} className="space-y-4">
@@ -413,9 +352,6 @@ export default function ProjectWorkspace() {
                             placeholder="colleague@example.com"
                             required
                           />
-                          <p className="text-xs text-muted-foreground">
-                            The user will receive an invitation they can accept or decline.
-                          </p>
                         </div>
                         <Button type="submit" className="w-full">
                           Send Invitation
@@ -518,10 +454,10 @@ export default function ProjectWorkspace() {
                             damping: 30,
                             delay: idx * 0.02
                           }}
-                          className={`flex ${msg.sender_id === user?.id ? 'justify-end' : 'justify-start'}`}
+                          className={`flex ${msg.sender_id === user?.id || msg.sender_id === user?._id ? 'justify-end' : 'justify-start'}`}
                         >
                           <div className={`max-w-[70%] rounded-2xl p-3 shadow-sm ${
-                            msg.sender_id === user?.id
+                            msg.sender_id === user?.id || msg.sender_id === user?._id
                               ? 'bg-primary text-primary-foreground shadow-primary/20'
                               : 'bg-card border border-border shadow-card'
                           }`}>
@@ -691,7 +627,7 @@ export default function ProjectWorkspace() {
                             <div>
                               <h4 className="font-semibold">{file.file_name}</h4>
                               <p className="text-xs text-muted-foreground">
-                                Uploaded by {file.uploader_name} • {(file.file_size / 1024).toFixed(2)} KB
+                                Uploaded by {file.uploader_name || 'System'} • {(file.file_size / 1024).toFixed(2)} KB
                               </p>
                             </div>
                           </div>
@@ -762,3 +698,4 @@ export default function ProjectWorkspace() {
     </DashboardLayout>
   );
 }
+

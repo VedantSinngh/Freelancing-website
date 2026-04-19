@@ -4,17 +4,20 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { Trophy, Plus, Edit2, Trash2, Award } from 'lucide-react';
+import { Trophy, Plus, Trash2, Award } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 
 export function AchievementManagement() {
   const { toast } = useToast();
   const [achievements, setAchievements] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -28,23 +31,13 @@ export function AchievementManagement() {
   }, []);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      const [achievementsResult, usersResult] = await Promise.all([
-        supabase.from('achievements').select('*, profiles!achievements_user_id_fkey(full_name)').order('created_at', { ascending: false }),
-        supabase.from('profiles').select('id, user_id, full_name, avatar_url')
-      ]);
-
-      if (achievementsResult.error) throw achievementsResult.error;
-      if (usersResult.error) throw usersResult.error;
-
-      setAchievements(achievementsResult.data || []);
-      setUsers(usersResult.data || []);
+      const res = await fetch(`${API_URL}/achievements`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch achievements');
+      setAchievements(await res.json());
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -52,50 +45,32 @@ export function AchievementManagement() {
 
   const handleCreateAchievement = async () => {
     try {
-      const { error } = await supabase.from('achievements').insert([
-        {
-          user_id: (await supabase.auth.getUser()).data.user?.id,
-          title: formData.title,
-          description: formData.description,
-          icon: formData.icon
-        }
-      ]);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Achievement created successfully'
+      const res = await fetch(`${API_URL}/achievements`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(formData)
       });
-
+      if (!res.ok) throw new Error('Failed to create achievement');
+      toast({ title: 'Success', description: 'Achievement created successfully' });
       setIsDialogOpen(false);
       setFormData({ title: '', description: '', icon: '🏆' });
       fetchData();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      const { error } = await supabase.from('achievements').delete().eq('id', id);
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Achievement deleted successfully'
+      const res = await fetch(`${API_URL}/achievements/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
       });
+      if (!res.ok) throw new Error('Failed to delete achievement');
+      toast({ title: 'Success', description: 'Achievement deleted successfully' });
       fetchData();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -152,7 +127,7 @@ export function AchievementManagement() {
                     placeholder="Awarded to exceptional collaborators"
                   />
                 </div>
-                <Button onClick={handleCreateAchievement} className="w-full">
+                <Button onClick={handleCreateAchievement} className="w-full" disabled={!formData.title}>
                   Create Achievement
                 </Button>
               </div>
@@ -182,20 +157,15 @@ export function AchievementManagement() {
                   <div>
                     <h4 className="font-semibold text-lg">{achievement.title}</h4>
                     <p className="text-sm text-muted-foreground">{achievement.description}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Created by: {achievement.profiles?.full_name || 'Unknown'}
-                    </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDelete(achievement.id)}
-                  >
-                    <Trash2 className="w-4 h-4 text-destructive" />
-                  </Button>
-                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDelete(achievement.id)}
+                >
+                  <Trash2 className="w-4 h-4 text-destructive" />
+                </Button>
               </div>
             ))}
           </div>

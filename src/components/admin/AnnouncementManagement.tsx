@@ -5,12 +5,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Megaphone, Plus, Pin, PinOff, Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
 
 export function AnnouncementManagement() {
   const { toast } = useToast();
@@ -30,20 +35,13 @@ export function AnnouncementManagement() {
   }, []);
 
   const fetchAnnouncements = async () => {
+    setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('announcements')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setAnnouncements(data || []);
+      const res = await fetch(`${API_URL}/admin/announcements`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch announcements');
+      setAnnouncements(await res.json());
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -51,85 +49,54 @@ export function AnnouncementManagement() {
 
   const handleCreate = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-
-      const { error } = await supabase.from('announcements').insert([
-        {
-          title: formData.title,
-          content: formData.content,
-          type: formData.type,
-          is_pinned: formData.is_pinned,
-          target_roles: formData.target_roles.length > 0 ? formData.target_roles : null,
-          created_by: user.id
-        }
-      ]);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Announcement created successfully'
+      const res = await fetch(`${API_URL}/admin/announcements`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(formData)
       });
-
+      if (!res.ok) throw new Error('Failed to create announcement');
+      toast({ title: 'Success', description: 'Announcement created successfully' });
       setIsDialogOpen(false);
       setFormData({ title: '', content: '', type: 'info', is_pinned: false, target_roles: [] });
       fetchAnnouncements();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const togglePin = async (id: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from('announcements')
-        .update({ is_pinned: !currentStatus })
-        .eq('id', id);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: currentStatus ? 'Announcement unpinned' : 'Announcement pinned'
+      const res = await fetch(`${API_URL}/admin/announcements/${id}/pin`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ is_pinned: !currentStatus })
       });
+      if (!res.ok) throw new Error('Failed to update announcement');
+      toast({ title: 'Success', description: currentStatus ? 'Announcement unpinned' : 'Announcement pinned' });
       fetchAnnouncements();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      const { error } = await supabase.from('announcements').delete().eq('id', id);
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Announcement deleted successfully'
+      const res = await fetch(`${API_URL}/admin/announcements/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
       });
+      if (!res.ok) throw new Error('Failed to delete announcement');
+      toast({ title: 'Success', description: 'Announcement deleted successfully' });
       fetchAnnouncements();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const typeColors: Record<string, string> = {
-    info: 'bg-info/10 text-info',
-    success: 'bg-success/10 text-success',
-    warning: 'bg-warning/10 text-warning',
+    info: 'bg-blue-100 text-blue-800',
+    success: 'bg-green-100 text-green-800',
+    warning: 'bg-yellow-100 text-yellow-800',
     maintenance: 'bg-muted text-muted-foreground'
   };
 
@@ -191,7 +158,7 @@ export function AnnouncementManagement() {
                     onCheckedChange={(checked) => setFormData({ ...formData, is_pinned: checked })}
                   />
                 </div>
-                <Button onClick={handleCreate} className="w-full">
+                <Button onClick={handleCreate} className="w-full" disabled={!formData.title || !formData.content}>
                   Publish Announcement
                 </Button>
               </div>
@@ -220,7 +187,7 @@ export function AnnouncementManagement() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <h4 className="font-semibold text-lg">{announcement.title}</h4>
-                      <Badge className={typeColors[announcement.type]}>
+                      <Badge className={typeColors[announcement.type] || typeColors.info}>
                         {announcement.type}
                       </Badge>
                       {announcement.is_pinned && (

@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useProjects } from '@/hooks/useProjects';
 import { useBids } from '@/hooks/useBids';
@@ -39,39 +38,9 @@ export default function ClientDashboard() {
   });
 
   const fetchConsultantReports = useCallback(async () => {
-    if (!user?.email) return;
-    try {
-      // Fetch reports accessible to this client via email grants
-      const { data: grants } = await supabase
-        .from('report_access_grants')
-        .select('report_id')
-        .eq('granted_to_email', user.email.toLowerCase());
-
-      const reportIds = (grants || []).map((g: any) => g.report_id);
-      if (reportIds.length === 0) return;
-
-      const { data } = await supabase
-        .from('consultant_reports')
-        .select('*, report_versions(*)')
-        .in('id', reportIds)
-        .order('updated_at', { ascending: false });
-
-      setConsultantReports((data || []).map((r: any) => ({
-        id: r.id,
-        title: r.title,
-        description: r.description,
-        format: r.format,
-        current_version: r.current_version || 1,
-        file_url: r.file_url,
-        file_size: r.file_size || 0,
-        uploader_name: 'Consultant',
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        is_accessible: true,
-        versions: r.report_versions || [],
-        access_count: 0,
-      })));
-    } catch { /* silent */ }
+    // Consultant reports are managed via the ConsultantVault feature
+    // Reports will show when the consultant shares them directly
+    setConsultantReports([]);
   }, [user?.email]);
   useEffect(() => {
     if (user?.id) {

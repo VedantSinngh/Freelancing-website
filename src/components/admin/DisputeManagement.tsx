@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,14 +6,18 @@ import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Scale, CheckCircle } from 'lucide-react';
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
 interface Dispute {
   id: string;
   dispute_type: string;
   description: string;
   status: string;
   created_at: string;
-  raised_by: string;
-  against_user: string | null;
 }
 
 export function DisputeManagement() {
@@ -29,20 +32,13 @@ export function DisputeManagement() {
   }, []);
 
   const fetchDisputes = async () => {
+    setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('disputes')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setDisputes(data || []);
+      const res = await fetch(`${API_URL}/disputes`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch disputes');
+      setDisputes(await res.json());
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -50,34 +46,18 @@ export function DisputeManagement() {
 
   const resolveDispute = async (disputeId: string, status: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      const { error } = await supabase
-        .from('disputes')
-        .update({
-          status,
-          resolution_notes: resolutionNotes,
-          resolved_by: user?.id,
-          resolved_at: new Date().toISOString()
-        })
-        .eq('id', disputeId);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: `Dispute ${status}`
+      const res = await fetch(`${API_URL}/disputes/${disputeId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ status, resolution_notes: resolutionNotes })
       });
-
+      if (!res.ok) throw new Error('Failed to resolve dispute');
+      toast({ title: 'Success', description: `Dispute ${status}` });
       setSelectedDispute(null);
       setResolutionNotes('');
       fetchDisputes();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
@@ -85,7 +65,7 @@ export function DisputeManagement() {
     switch (status) {
       case 'open': return 'bg-warning text-warning-foreground';
       case 'investigating': return 'bg-accent text-accent-foreground';
-      case 'resolved': return 'bg-success text-success-foreground';
+      case 'resolved': return 'bg-muted text-muted-foreground';
       case 'closed': return 'bg-muted text-muted-foreground';
       default: return 'bg-muted text-muted-foreground';
     }
@@ -113,17 +93,12 @@ export function DisputeManagement() {
         ) : (
           <div className="space-y-4">
             {disputes.map((dispute) => (
-              <div
-                key={dispute.id}
-                className="border border-border rounded-lg p-4 space-y-3"
-              >
+              <div key={dispute.id} className="border border-border rounded-lg p-4 space-y-3">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2">
                       <Badge variant="outline">{dispute.dispute_type}</Badge>
-                      <Badge className={getStatusColor(dispute.status)}>
-                        {dispute.status}
-                      </Badge>
+                      <Badge className={getStatusColor(dispute.status)}>{dispute.status}</Badge>
                     </div>
                     <p className="text-sm mb-2">{dispute.description}</p>
                     <p className="text-xs text-muted-foreground">
@@ -142,26 +117,15 @@ export function DisputeManagement() {
                     />
                     <div className="flex gap-2">
                       {dispute.status === 'open' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => resolveDispute(dispute.id, 'investigating')}
-                        >
+                        <Button size="sm" variant="outline" onClick={() => resolveDispute(dispute.id, 'investigating')}>
                           Start Investigation
                         </Button>
                       )}
-                      <Button
-                        size="sm"
-                        onClick={() => resolveDispute(dispute.id, 'resolved')}
-                      >
+                      <Button size="sm" onClick={() => resolveDispute(dispute.id, 'resolved')}>
                         <CheckCircle className="w-4 h-4 mr-2" />
                         Resolve
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => resolveDispute(dispute.id, 'closed')}
-                      >
+                      <Button size="sm" variant="outline" onClick={() => resolveDispute(dispute.id, 'closed')}>
                         Close
                       </Button>
                     </div>
@@ -169,11 +133,7 @@ export function DisputeManagement() {
                 )}
 
                 {(dispute.status === 'open' || dispute.status === 'investigating') && selectedDispute !== dispute.id && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSelectedDispute(dispute.id)}
-                  >
+                  <Button size="sm" variant="outline" onClick={() => setSelectedDispute(dispute.id)}>
                     Review Dispute
                   </Button>
                 )}

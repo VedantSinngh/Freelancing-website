@@ -10,9 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { FreelancerPortfolio, type PortfolioItem } from '@/components/FreelancerPortfolio';
@@ -24,7 +22,12 @@ import {
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-interface Profile {
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
+interface ProfileData {
   full_name: string | null;
   bio: string | null;
   skills: string[] | null;
@@ -85,7 +88,7 @@ export default function Profile() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
-  const [profile, setProfile] = useState<Profile>({
+  const [profile, setProfile] = useState<ProfileData>({
     full_name: null, bio: null, skills: null, location: null,
     hourly_rate: null, phone: null, company: null, website: null,
     position: null, linkedin: null, github: null, avatar_url: null,
@@ -128,79 +131,84 @@ export default function Profile() {
     }
   }, [user, viewingUserId]);
 
+  const apiFetch = async (url: string, options?: RequestInit) => {
+    const res = await fetch(`${API_URL}${url}`, {
+      ...options,
+      headers: { ...getAuthHeaders(), ...(options?.headers || {}) }
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error?.message || 'Request failed');
+    }
+    return res.json();
+  };
+
   const fetchProfile = async (uid: string) => {
-    const { data } = await supabase.from('profiles').select('*').eq('user_id', uid).single();
-    if (data) setProfile(data);
+    try {
+      const data = await apiFetch(`/profile/${uid}`);
+      if (data) setProfile(data);
+    } catch { /* silent */ }
   };
 
   const fetchAchievements = async (uid: string) => {
     if (!uid || uid === 'undefined') return;
     try {
-      const token = localStorage.getItem('auth_token');
-      const res = await fetch(`${API_URL}/achievements/${uid}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) setAchievements(await res.json() || []);
+      const data = await apiFetch(`/achievements/${uid}`);
+      setAchievements(data || []);
     } catch { /* silent */ }
   };
 
   const fetchFriends = async (uid: string) => {
     try {
-      const { data } = await supabase
-        .from('friendships').select('user_id_1, user_id_2')
-        .or(`user_id_1.eq.${uid},user_id_2.eq.${uid}`);
-      const ids = (data || []).map(f => f.user_id_1 === uid ? f.user_id_2 : f.user_id_1);
-      if (ids.length > 0) {
-        const { data: fp } = await supabase.from('profiles')
-          .select('user_id, full_name, avatar_url, position, company').in('user_id', ids);
-        setFriends((fp || []).map(p => ({ id: p.user_id, ...p })));
-      }
+      const data = await apiFetch(`/friends/${uid}`);
+      setFriends(data || []);
     } catch { /* silent */ }
   };
 
   const fetchPortfolio = async (uid: string) => {
     try {
-      const { data } = await supabase.from('portfolio_items').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+      const data = await apiFetch(`/portfolio/${uid}`);
       setPortfolioItems(data || []);
-    } catch { /* table may not exist yet */ }
+    } catch { /* silent */ }
   };
 
   const fetchWorkExperience = async (uid: string) => {
     try {
-      const { data } = await supabase.from('work_experience').select('*').eq('user_id', uid).order('start_date', { ascending: false });
+      const data = await apiFetch(`/work-experience/${uid}`);
       setWorkExperience(data || []);
     } catch { /* silent */ }
   };
 
   const fetchCertifications = async (uid: string) => {
     try {
-      const { data } = await supabase.from('certifications').select('*').eq('user_id', uid).order('issue_date', { ascending: false });
+      const data = await apiFetch(`/certifications/${uid}`);
       setCertifications(data || []);
     } catch { /* silent */ }
   };
 
   const fetchReviews = async (uid: string) => {
     try {
-      const { data } = await supabase.from('reviews').select('*, profiles!reviews_reviewer_id_fkey(full_name, avatar_url)')
-        .eq('reviewee_id', uid).order('created_at', { ascending: false });
-      setReviews((data || []).map((r: any) => ({
-        ...r,
-        reviewer_name: r.profiles?.full_name || 'Anonymous',
-        reviewer_avatar: r.profiles?.avatar_url,
-      })));
+      const data = await apiFetch(`/reviews/${uid}`);
+      setReviews(data || []);
     } catch { /* silent */ }
   };
 
   const handleUpdateProfile = async () => {
-    const { error } = await supabase.from('profiles').update({
-      full_name: profile.full_name, bio: profile.bio, skills: profile.skills,
-      location: profile.location, hourly_rate: profile.hourly_rate, phone: profile.phone,
-      company: profile.company, website: profile.website, position: profile.position,
-      linkedin: profile.linkedin, github: profile.github
-    }).eq('user_id', user?.id);
-    if (error) { toast({ title: 'Error', description: error.message, variant: 'destructive' }); return; }
-    toast({ title: 'Success', description: 'Profile updated successfully' });
-    setIsEditDialogOpen(false);
+    try {
+      await apiFetch('/profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          full_name: profile.full_name, bio: profile.bio, skills: profile.skills,
+          location: profile.location, hourly_rate: profile.hourly_rate, phone: profile.phone,
+          company: profile.company, website: profile.website, position: profile.position,
+          linkedin: profile.linkedin, github: profile.github
+        })
+      });
+      toast({ title: 'Success', description: 'Profile updated successfully' });
+      setIsEditDialogOpen(false);
+    } catch (e: any) {
+      toast({ title: 'Profile Update Error', description: e.message, variant: 'destructive' });
+    }
   };
 
   const handleAddSkill = () => {
@@ -213,12 +221,10 @@ export default function Profile() {
 
   const handleAddAchievement = async () => {
     try {
-      const token = localStorage.getItem('auth_token');
-      const res = await fetch(`${API_URL}/achievements`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      await apiFetch('/achievements', {
+        method: 'POST',
         body: JSON.stringify({ title: newAchievement.title, description: newAchievement.description, icon: newAchievement.icon || 'Award' })
       });
-      if (!res.ok) throw new Error('Failed');
       toast({ title: 'Success', description: 'Achievement added' });
       setNewAchievement({ title: '', description: '', icon: '' });
       setIsAchievementDialogOpen(false);
@@ -228,8 +234,7 @@ export default function Profile() {
 
   const handleDeleteAchievement = async (id: string) => {
     try {
-      const token = localStorage.getItem('auth_token');
-      await fetch(`${API_URL}/achievements/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
+      await apiFetch(`/achievements/${id}`, { method: 'DELETE' });
       toast({ title: 'Success', description: 'Achievement deleted' });
       fetchAchievements(user?.id || '');
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
@@ -238,23 +243,21 @@ export default function Profile() {
   // Portfolio CRUD
   const handleAddPortfolio = async (item: Omit<PortfolioItem, 'id' | 'created_at'>) => {
     try {
-      const { error } = await supabase.from('portfolio_items').insert([{ ...item, user_id: user?.id }]);
-      if (error) throw error;
+      await apiFetch('/portfolio', { method: 'POST', body: JSON.stringify(item) });
       toast({ title: 'Success', description: 'Portfolio project added' });
       fetchPortfolio(user?.id || '');
-    } catch (e: any) { toast({ title: 'Error', description: e.message || 'Table may not exist', variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
   const handleUpdatePortfolio = async (id: string, item: Partial<PortfolioItem>) => {
     try {
-      const { error } = await supabase.from('portfolio_items').update(item).eq('id', id);
-      if (error) throw error;
+      await apiFetch(`/portfolio/${id}`, { method: 'PUT', body: JSON.stringify(item) });
       toast({ title: 'Success', description: 'Updated' });
       fetchPortfolio(user?.id || '');
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
   const handleDeletePortfolio = async (id: string) => {
     try {
-      await supabase.from('portfolio_items').delete().eq('id', id);
+      await apiFetch(`/portfolio/${id}`, { method: 'DELETE' });
       toast({ title: 'Success', description: 'Removed' });
       fetchPortfolio(user?.id || '');
     } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
@@ -263,35 +266,33 @@ export default function Profile() {
   // Work Experience CRUD
   const handleAddExp = async () => {
     try {
-      const { error } = await supabase.from('work_experience').insert([{ ...newExp, user_id: user?.id }]);
-      if (error) throw error;
+      await apiFetch('/work-experience', { method: 'POST', body: JSON.stringify(newExp) });
       toast({ title: 'Success', description: 'Experience added' });
       setNewExp({ ...EMPTY_EXP });
       setIsExpDialogOpen(false);
       fetchWorkExperience(user?.id || '');
-    } catch (e: any) { toast({ title: 'Error', description: e.message || 'Table may not exist', variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
   const handleDeleteExp = async (id: string) => {
     try {
-      await supabase.from('work_experience').delete().eq('id', id);
+      await apiFetch(`/work-experience/${id}`, { method: 'DELETE' });
       fetchWorkExperience(user?.id || '');
     } catch { /* silent */ }
   };
 
-  // Certification CRUD  
+  // Certification CRUD
   const handleAddCert = async () => {
     try {
-      const { error } = await supabase.from('certifications').insert([{ ...newCert, user_id: user?.id }]);
-      if (error) throw error;
+      await apiFetch('/certifications', { method: 'POST', body: JSON.stringify(newCert) });
       toast({ title: 'Success', description: 'Certification added' });
       setNewCert({ ...EMPTY_CERT });
       setIsCertDialogOpen(false);
       fetchCertifications(user?.id || '');
-    } catch (e: any) { toast({ title: 'Error', description: e.message || 'Table may not exist', variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
   const handleDeleteCert = async (id: string) => {
     try {
-      await supabase.from('certifications').delete().eq('id', id);
+      await apiFetch(`/certifications/${id}`, { method: 'DELETE' });
       fetchCertifications(user?.id || '');
     } catch { /* silent */ }
   };
@@ -300,13 +301,13 @@ export default function Profile() {
   const handleAddReview = async (rating: number, comment: string) => {
     const targetId = viewingUserId || user?.id;
     try {
-      const { error } = await supabase.from('reviews').insert([{
-        reviewer_id: user?.id, reviewee_id: targetId, rating, comment
-      }]);
-      if (error) throw error;
+      await apiFetch('/reviews', {
+        method: 'POST',
+        body: JSON.stringify({ reviewee_id: targetId, rating, comment })
+      });
       toast({ title: 'Success', description: 'Review submitted!' });
       fetchReviews(targetId || '');
-    } catch (e: any) { toast({ title: 'Error', description: e.message || 'Table may not exist', variant: 'destructive' }); }
+    } catch (e: any) { toast({ title: 'Error', description: e.message, variant: 'destructive' }); }
   };
 
   const isOwnProfile = !viewingUserId || viewingUserId === user?.id;
@@ -336,7 +337,7 @@ export default function Profile() {
                 <Avatar className="w-28 h-28 border-4 border-card shadow-xl ring-2 ring-primary/30">
                   <AvatarImage src={profile.avatar_url || undefined} />
                   <AvatarFallback className="text-3xl bg-gradient-to-br from-primary to-secondary text-white">
-                    {profile.full_name?.charAt(0) || 'U'}
+                    {profile.full_name?.charAt(0) || user?.fullName?.charAt(0) || 'U'}
                   </AvatarFallback>
                 </Avatar>
 
@@ -344,7 +345,7 @@ export default function Profile() {
                   <div className="flex flex-col md:flex-row md:items-start gap-4">
                     <div className="flex-1">
                       <h1 className="text-3xl font-black bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-                        {profile.full_name || 'Your Name'}
+                        {profile.full_name || user?.fullName || 'Your Name'}
                       </h1>
                       {profile.position && <p className="text-lg text-muted-foreground mt-0.5">{profile.position}</p>}
                       {profile.company && (

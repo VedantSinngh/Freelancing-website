@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,26 +8,29 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Search, Shield, UserX, UserCheck, UserCog } from 'lucide-react';
 
-interface Profile {
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const getAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+});
+
+interface UserEntry {
   id: string;
   user_id: string;
   full_name: string | null;
+  email: string;
+  role: string;
   trust_level: string;
   created_at: string;
 }
 
-interface UserRole {
-  role: string;
-}
-
 export function UserManagement() {
   const { toast } = useToast();
-  const [users, setUsers] = useState<Profile[]>([]);
-  const [userRoles, setUserRoles] = useState<Record<string, string>>({});
+  const [users, setUsers] = useState<UserEntry[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
-  const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
+  const [selectedUser, setSelectedUser] = useState<UserEntry | null>(null);
   const [roleDialogOpen, setRoleDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -37,32 +39,11 @@ export function UserManagement() {
 
   const fetchUsers = async () => {
     try {
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (profilesError) throw profilesError;
-
-      const { data: roles, error: rolesError } = await supabase
-        .from('user_roles')
-        .select('user_id, role');
-
-      if (rolesError) throw rolesError;
-
-      const rolesMap: Record<string, string> = {};
-      roles?.forEach((r: any) => {
-        rolesMap[r.user_id] = r.role;
-      });
-
-      setUsers(profiles || []);
-      setUserRoles(rolesMap);
+      const res = await fetch(`${API_URL}/admin/users/full`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch users');
+      setUsers(await res.json());
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error fetching users', description: error.message, variant: 'destructive' });
     } finally {
       setLoading(false);
     }
@@ -70,67 +51,40 @@ export function UserManagement() {
 
   const updateTrustLevel = async (userId: string, newLevel: string) => {
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ trust_level: newLevel })
-        .eq('user_id', userId);
-
-      if (error) throw error;
-
-      toast({
-        title: 'Success',
-        description: 'Trust level updated successfully'
+      const res = await fetch(`${API_URL}/admin/users/${userId}/trust`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ trust_level: newLevel })
       });
-
+      if (!res.ok) throw new Error('Failed to update trust level');
+      toast({ title: 'Success', description: 'Trust level updated successfully' });
       fetchUsers();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
-  const updateUserRole = async (userId: string, newRole: 'admin' | 'client' | 'freelancer' | 'consultant') => {
+  const updateUserRole = async (userId: string, newRole: string) => {
     try {
-      // First, delete existing role
-      const { error: deleteError } = await supabase
-        .from('user_roles')
-        .delete()
-        .eq('user_id', userId);
-
-      if (deleteError) throw deleteError;
-
-      // Then insert new role
-      const { error: insertError } = await supabase
-        .from('user_roles')
-        .insert({
-          user_id: userId,
-          role: newRole
-        });
-
-      if (insertError) throw insertError;
-
-      toast({
-        title: 'Success',
-        description: 'User role updated successfully'
+      const res = await fetch(`${API_URL}/admin/users/${userId}/role`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ role: newRole })
       });
-
+      if (!res.ok) throw new Error('Failed to update role');
+      toast({ title: 'Success', description: 'User role updated successfully' });
       setRoleDialogOpen(false);
       fetchUsers();
     } catch (error: any) {
-      toast({
-        title: 'Error',
-        description: error.message,
-        variant: 'destructive'
-      });
+      toast({ title: 'Error', description: error.message, variant: 'destructive' });
     }
   };
 
   const filteredUsers = users.filter((user) => {
-    const matchesSearch = user.full_name?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole = roleFilter === 'all' || userRoles[user.user_id] === roleFilter;
+    const matchesSearch =
+      (user.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+      (user.email?.toLowerCase() || '').includes(searchTerm.toLowerCase());
+    const matchesRole = roleFilter === 'all' || user.role === roleFilter;
     return matchesSearch && matchesRole;
   });
 
@@ -150,7 +104,7 @@ export function UserManagement() {
           <Shield className="w-5 h-5" />
           User Management & Role Control
         </CardTitle>
-        
+
         <div className="flex flex-col sm:flex-row gap-4 mt-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -161,7 +115,7 @@ export function UserManagement() {
               className="pl-10"
             />
           </div>
-          
+
           <Select value={roleFilter} onValueChange={setRoleFilter}>
             <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue placeholder="Filter by role" />
@@ -182,6 +136,8 @@ export function UserManagement() {
           <div className="text-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary mx-auto"></div>
           </div>
+        ) : filteredUsers.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">No users found.</div>
         ) : (
           <div className="space-y-3">
             {filteredUsers.map((user) => (
@@ -191,16 +147,14 @@ export function UserManagement() {
               >
                 <div className="flex-1">
                   <div className="flex items-center gap-3">
-                    <h4 className="font-semibold">{user.full_name || 'Unnamed User'}</h4>
-                    <Badge variant="outline">
-                      {userRoles[user.user_id] || 'No Role'}
-                    </Badge>
+                    <h4 className="font-semibold">{user.full_name || user.email || 'Unnamed User'}</h4>
+                    <Badge variant="outline">{user.role || 'No Role'}</Badge>
                     <Badge className={getTrustBadgeColor(user.trust_level || 'active')}>
                       {user.trust_level || 'active'}
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Joined: {new Date(user.created_at).toLocaleDateString()}
+                    {user.email} · Joined: {new Date(user.created_at).toLocaleDateString()}
                   </p>
                 </div>
 
@@ -210,11 +164,7 @@ export function UserManagement() {
                     if (!open) setSelectedUser(null);
                   }}>
                     <DialogTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSelectedUser(user)}
-                      >
+                      <Button variant="outline" size="sm" onClick={() => setSelectedUser(user)}>
                         <UserCog className="w-4 h-4 mr-2" />
                         Manage Role
                       </Button>
@@ -229,13 +179,11 @@ export function UserManagement() {
                       <div className="space-y-4 py-4">
                         <div className="space-y-2">
                           <label className="text-sm font-medium">Current Role</label>
-                          <Badge variant="outline" className="block w-fit">
-                            {userRoles[user.user_id] || 'No Role'}
-                          </Badge>
+                          <Badge variant="outline" className="block w-fit">{user.role || 'No Role'}</Badge>
                         </div>
                         <div className="space-y-2">
                           <label className="text-sm font-medium">New Role</label>
-                          <Select onValueChange={(value) => updateUserRole(user.user_id, value as 'admin' | 'client' | 'freelancer' | 'consultant')}>
+                          <Select onValueChange={(value) => updateUserRole(user.user_id, value)}>
                             <SelectTrigger>
                               <SelectValue placeholder="Select new role" />
                             </SelectTrigger>
@@ -260,23 +208,14 @@ export function UserManagement() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="active">
-                        <div className="flex items-center gap-2">
-                          <UserCheck className="w-4 h-4" />
-                          Active
-                        </div>
+                        <div className="flex items-center gap-2"><UserCheck className="w-4 h-4" />Active</div>
                       </SelectItem>
                       <SelectItem value="verified">
-                        <div className="flex items-center gap-2">
-                          <Shield className="w-4 h-4" />
-                          Verified
-                        </div>
+                        <div className="flex items-center gap-2"><Shield className="w-4 h-4" />Verified</div>
                       </SelectItem>
                       <SelectItem value="flagged">Flagged</SelectItem>
                       <SelectItem value="suspended">
-                        <div className="flex items-center gap-2">
-                          <UserX className="w-4 h-4" />
-                          Suspended
-                        </div>
+                        <div className="flex items-center gap-2"><UserX className="w-4 h-4" />Suspended</div>
                       </SelectItem>
                     </SelectContent>
                   </Select>

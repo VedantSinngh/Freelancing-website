@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Separator } from '@/components/ui/separator';
-import { supabase } from '@/integrations/supabase/client';
+
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -64,9 +64,9 @@ export default function NotificationPreferences() {
   const fetchPrefs = async () => {
     if (!user?.id) return;
     try {
-      const { data } = await supabase.from('notification_preferences').select('*').eq('user_id', user.id).single();
-      if (data) setPrefs(data);
-    } catch { /* table may not exist — use defaults */ }
+      const stored = localStorage.getItem(`notification_prefs_${user.id}`);
+      if (stored) setPrefs(JSON.parse(stored));
+    } catch { /* use defaults */ }
     finally { setLoading(false); }
   };
 
@@ -74,13 +74,12 @@ export default function NotificationPreferences() {
     if (!user?.id) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from('notification_preferences').upsert({ ...prefs, user_id: user.id });
-      if (error) throw error;
+      localStorage.setItem(`notification_prefs_${user.id}`, JSON.stringify(prefs));
       setSaved(true);
       toast({ title: 'Preferences saved!', description: 'Your notification settings have been updated.' });
       setTimeout(() => setSaved(false), 3000);
     } catch (e: any) {
-      toast({ title: 'Error', description: e.message || 'Could not save preferences (table may not exist yet)', variant: 'destructive' });
+      toast({ title: 'Error', description: 'Could not save preferences', variant: 'destructive' });
     } finally {
       setSaving(false);
     }
